@@ -1,0 +1,435 @@
+---
+title: Authentication
+description: Learn how to authenticate with the Torn API using JWT tokens
+---
+
+## Overview
+
+Torn uses **JWT (JSON Web Token)** authentication for securing API endpoints. The authentication flow involves:
+
+1. Login with email and password
+2. Receive a JWT access token
+3. Include the token in subsequent requests
+4. Optionally validate the session
+
+## Token Configuration
+
+<ParamField path="Algorithm" type="string" default="HS256">
+  JWT signing algorithm
+</ParamField>
+
+<ParamField path="Token Expiration" type="duration" default="12 hours">
+  Access tokens expire after 12 hours (720 minutes)
+</ParamField>
+
+<ParamField path="Token Type" type="string" default="bearer">
+  OAuth2 bearer token format
+</ParamField>
+
+## Authentication Endpoints
+
+### POST /auth/login
+
+JSON-based login endpoint that accepts email and password credentials.
+
+<ParamField body="email" type="string" required>
+  User's email address
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  User's password
+</ParamField>
+
+**Request Example:**
+
+```bash
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "securepassword123"
+  }'
+```
+
+**Response:**
+
+<ResponseField name="access_token" type="string">
+  JWT access token for authentication
+</ResponseField>
+
+<ResponseField name="token_type" type="string">
+  Token type (always "bearer")
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  User information object
+  <ResponseField name="id" type="integer">
+    User ID
+  </ResponseField>
+  <ResponseField name="email" type="string">
+    User's email address
+  </ResponseField>
+  <ResponseField name="full_name" type="string">
+    User's full name (optional)
+  </ResponseField>
+  <ResponseField name="is_active" type="boolean">
+    Whether the user account is active
+  </ResponseField>
+  <ResponseField name="is_superuser" type="boolean">
+    Whether the user has superuser privileges
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="available_tenants" type="array">
+  List of tenants (companies) the user has access to
+  <ResponseField name="id" type="integer">
+    Tenant ID
+  </ResponseField>
+  <ResponseField name="name" type="string">
+    Company name
+  </ResponseField>
+  <ResponseField name="rut" type="string">
+    Chilean tax ID (RUT)
+  </ResponseField>
+  <ResponseField name="role_name" type="string">
+    User's role in this tenant (e.g., "ADMINISTRADOR", "VENDEDOR")
+  </ResponseField>
+  <ResponseField name="is_active" type="boolean">
+    Whether the tenant is active
+  </ResponseField>
+  <ResponseField name="max_users" type="integer">
+    Maximum number of users allowed for this tenant
+  </ResponseField>
+  <ResponseField name="permissions" type="object">
+    Role-based permissions for this tenant
+  </ResponseField>
+</ResponseField>
+
+<CodeGroup>
+
+```json 200 Success
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "user": {
+    "id": 1,
+    "email": "user@example.com",
+    "full_name": "John Doe",
+    "is_active": true,
+    "is_superuser": false
+  },
+  "available_tenants": [
+    {
+      "id": 1,
+      "name": "Mi Empresa SPA",
+      "rut": "12345678-9",
+      "role_name": "ADMINISTRADOR",
+      "is_active": true,
+      "max_users": 5,
+      "permissions": {
+        "sales": ["create", "read", "update"],
+        "products": ["create", "read", "update", "delete"]
+      }
+    }
+  ]
+}
+```
+
+```json 401 Invalid Credentials
+{
+  "detail": "Credenciales incorrectas"
+}
+```
+
+</CodeGroup>
+
+### POST /auth/token
+
+OAuth2-compatible token endpoint using form data (alternative to `/auth/login`).
+
+<ParamField body="username" type="string" required>
+  User's email address (sent as "username" for OAuth2 compatibility)
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  User's password
+</ParamField>
+
+**Request Example:**
+
+```bash
+curl -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=user@example.com&password=securepassword123"
+```
+
+**Response:**
+
+Same response structure as `/auth/login`.
+
+<CodeGroup>
+
+```json 200 Success
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "user": { ... },
+  "available_tenants": [ ... ]
+}
+```
+
+```json 401 Invalid Credentials
+{
+  "detail": "Incorrect email or password"
+}
+```
+
+</CodeGroup>
+
+### GET /auth/users/me
+
+Retrieve the current authenticated user's profile.
+
+**Headers:**
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token: `Bearer YOUR_ACCESS_TOKEN`
+</ParamField>
+
+**Request Example:**
+
+```bash
+curl http://localhost:8000/auth/users/me \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+**Response:**
+
+<ResponseField name="id" type="integer">
+  User ID
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  User's email address
+</ResponseField>
+
+<ResponseField name="full_name" type="string">
+  User's full name
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean">
+  Account status
+</ResponseField>
+
+<ResponseField name="is_superuser" type="boolean">
+  Superuser status
+</ResponseField>
+
+```json
+{
+  "id": 1,
+  "email": "user@example.com",
+  "full_name": "John Doe",
+  "is_active": true,
+  "is_superuser": false
+}
+```
+
+### GET /auth/validate
+
+Validate the current session and refresh the list of available tenants.
+
+**Headers:**
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token: `Bearer YOUR_ACCESS_TOKEN`
+</ParamField>
+
+**Request Example:**
+
+```bash
+curl http://localhost:8000/auth/validate \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+**Response:**
+
+```json
+{
+  "user": {
+    "id": 1,
+    "email": "user@example.com",
+    "full_name": "John Doe",
+    "is_active": true,
+    "is_superuser": false
+  },
+  "available_tenants": [
+    {
+      "id": 1,
+      "name": "Mi Empresa SPA",
+      "rut": "12345678-9",
+      "role_name": "ADMINISTRADOR",
+      "is_active": true,
+      "max_users": 5,
+      "permissions": { ... }
+    }
+  ]
+}
+```
+
+## Using Authentication Tokens
+
+After obtaining an access token, include it in the `Authorization` header for all authenticated requests:
+
+```bash
+curl http://localhost:8000/api/endpoint \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "X-Tenant-ID: 1"
+```
+
+### Token Format
+
+The JWT token contains the following claims:
+
+- **sub**: User's email address (subject)
+- **exp**: Token expiration timestamp (UTC)
+
+Example decoded token payload:
+
+```json
+{
+  "sub": "user@example.com",
+  "exp": 1709913600
+}
+```
+
+## Security Implementation
+
+### Password Hashing
+
+Passwords are hashed using **bcrypt** algorithm via the `passlib` library:
+
+- Scheme: `bcrypt`
+- Deprecated schemes are automatically handled
+- Plain passwords are never stored
+
+**Reference:** `app/utils/security.py:15-21`
+
+### Token Generation
+
+Tokens are generated using the `python-jose` library:
+
+```python
+from jose import jwt
+
+def create_access_token(subject: str, expires_delta: timedelta = None) -> str:
+    expire = datetime.now(timezone.utc) + expires_delta
+    to_encode = {"exp": expire, "sub": str(subject)}
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+```
+
+**Reference:** `app/utils/security.py:23-31`
+
+### Token Validation
+
+Token validation is handled by the `get_current_global_user` dependency:
+
+1. Extract token from Authorization header
+2. Decode JWT using SECRET_KEY
+3. Extract user email from "sub" claim
+4. Query database for user
+5. Return user object or raise 401 error
+
+**Reference:** `app/dependencies/tenant.py:34-56`
+
+## Multi-Tenant Authentication Flow
+
+Torn's authentication works across two levels:
+
+### 1. Global Authentication
+
+First, authenticate at the SaaS level to get your access token:
+
+```bash
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "password"}'
+```
+
+### 2. Tenant Access
+
+Use the token with `X-Tenant-ID` header to access tenant-specific resources:
+
+```bash
+curl http://localhost:8000/products/ \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "X-Tenant-ID: 1"
+```
+
+The API validates:
+- Token is valid and not expired
+- User has access to the specified tenant
+- User's role has appropriate permissions
+
+**Reference:** `app/dependencies/tenant.py:59-82`
+
+<Note>
+Superusers can access any tenant, even without explicit membership. For regular users, access is validated through the `TenantUser` relationship.
+</Note>
+
+## Common Authentication Errors
+
+<CodeGroup>
+
+```json 401 Missing Token
+{
+  "detail": "Not authenticated"
+}
+```
+
+```json 401 Invalid Token
+{
+  "detail": "No se pudo validar la sesión global"
+}
+```
+
+```json 403 No Tenant Access
+{
+  "detail": "No tienes acceso a este Inquilino / Empresa."
+}
+```
+
+```json 404 Tenant Not Found
+{
+  "detail": "Inquilino no encontrado o inactivo."
+}
+```
+
+</CodeGroup>
+
+## Environment Variables
+
+Authentication relies on the following environment variables:
+
+<ParamField path="SECRET_KEY" type="string" default="super_secret_key_change_in_prod">
+  JWT signing secret key (MUST be changed in production)
+</ParamField>
+
+<Warning>
+Always set a strong, unique `SECRET_KEY` in production environments. Never use the default value.
+</Warning>
+
+## Best Practices
+
+1. **Store tokens securely**: Keep access tokens in secure storage (httpOnly cookies, secure local storage)
+2. **Handle token expiration**: Implement token refresh logic or re-authentication after 12 hours
+3. **Use HTTPS**: Always use HTTPS in production to prevent token interception
+4. **Validate permissions**: Check user roles and permissions before performing operations
+5. **Rotate secrets**: Periodically rotate the SECRET_KEY in production environments
+
+## Next Steps
+
+- Explore [Tenant Management](/api/tenants) to learn about multi-tenant operations
+- Review [User Management](/api/users) for managing users within tenants
+- Check [Roles & Permissions](/api/roles) for access control details

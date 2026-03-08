@@ -1,0 +1,256 @@
+---
+title: Users
+description: User management endpoints for creating, updating, and managing system users
+---
+
+The Users API allows you to manage system users including sellers, administrators, and other staff members. Users can be assigned roles and permissions to control access to different parts of the system.
+
+## List Sellers
+
+<api method="GET" url="/api/users/sellers" />
+
+Returns all active users with the SELLER role.
+
+### Response
+
+<ResponseField name="id" type="integer" required>
+  User unique identifier
+</ResponseField>
+
+<ResponseField name="rut" type="string">
+  Chilean tax ID (RUT)
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  User email address
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  User full name
+</ResponseField>
+
+<ResponseField name="role" type="string">
+  User role (e.g., SELLER, ADMINISTRADOR)
+</ResponseField>
+
+<ResponseField name="role_id" type="integer">
+  Associated role ID
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean" required>
+  Whether the user is active
+</ResponseField>
+
+<ResponseField name="is_owner" type="boolean">
+  Whether the user is the tenant owner
+</ResponseField>
+
+<ResponseField name="role_obj" type="object">
+  Detailed role information including permissions
+</ResponseField>
+
+### Example
+
+```bash
+curl -X GET "https://api.torn.cl/api/users/sellers" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json
+[
+  {
+    "id": 1,
+    "rut": "12345678-9",
+    "email": "vendedor@example.com",
+    "name": "Juan Pérez",
+    "role": "SELLER",
+    "role_id": 2,
+    "is_active": true,
+    "is_owner": false,
+    "role_obj": {
+      "id": 2,
+      "name": "VENDEDOR",
+      "can_perform_sales": true
+    }
+  }
+]
+```
+</ResponseExample>
+
+## List All Users
+
+<api method="GET" url="/api/users/" />
+
+Returns all active users in the current tenant. Optionally filter by role.
+
+### Query Parameters
+
+<ParamField query="role" type="string">
+  Filter users by role name (e.g., SELLER, ADMINISTRADOR)
+</ParamField>
+
+### Response
+
+Returns an array of user objects with the same structure as the sellers endpoint.
+
+### Example
+
+```bash
+curl -X GET "https://api.torn.cl/api/users/?role=SELLER" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+## Create User
+
+<api method="POST" url="/api/users/" />
+
+Creates a new user in both the global system and the local tenant. If the email doesn't exist globally, a new SaaS user will be created.
+
+### Request Body
+
+<ParamField body="full_name" type="string" required>
+  User's full name
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  User's email address (used for login)
+</ParamField>
+
+<ParamField body="password" type="string">
+  Password for new users (required if email doesn't exist)
+</ParamField>
+
+<ParamField body="rut" type="string">
+  Chilean tax ID (RUT) - optional for staff
+</ParamField>
+
+<ParamField body="role_id" type="integer">
+  Role ID to assign to the user
+</ParamField>
+
+### Response
+
+Returns the created user object with status code 201.
+
+### Example
+
+```bash
+curl -X POST "https://api.torn.cl/api/users/" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_name": "María González",
+    "email": "maria@example.com",
+    "password": "securePassword123",
+    "role_id": 2
+  }'
+```
+
+<ResponseExample>
+```json
+{
+  "id": 5,
+  "rut": null,
+  "email": "maria@example.com",
+  "name": "María González",
+  "role": "VENDEDOR",
+  "role_id": 2,
+  "is_active": true,
+  "is_owner": false,
+  "role_obj": {
+    "id": 2,
+    "name": "VENDEDOR",
+    "description": "Usuario de ventas",
+    "can_perform_sales": true
+  }
+}
+```
+</ResponseExample>
+
+## Update User
+
+<api method="PUT" url="/api/users/{user_id}" />
+
+Updates an existing user's information. The owner can only update their own name and password through this endpoint.
+
+### Path Parameters
+
+<ParamField path="user_id" type="integer" required>
+  ID of the user to update
+</ParamField>
+
+### Request Body
+
+<ParamField body="full_name" type="string">
+  User's full name
+</ParamField>
+
+<ParamField body="email" type="string">
+  User's email address
+</ParamField>
+
+<ParamField body="password" type="string">
+  New password for the user
+</ParamField>
+
+<ParamField body="role_id" type="integer">
+  New role ID to assign
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Whether the user is active
+</ParamField>
+
+### Response
+
+Returns the updated user object.
+
+### Example
+
+```bash
+curl -X PUT "https://api.torn.cl/api/users/5" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_name": "María González Pérez",
+    "role_id": 3
+  }'
+```
+
+## Deactivate User
+
+<api method="DELETE" url="/api/users/{user_id}" />
+
+Performs a soft delete by marking the user as inactive. The main administrator cannot deactivate themselves.
+
+### Path Parameters
+
+<ParamField path="user_id" type="integer" required>
+  ID of the user to deactivate
+</ParamField>
+
+### Response
+
+Returns status code 204 (No Content) on success.
+
+### Example
+
+```bash
+curl -X DELETE "https://api.torn.cl/api/users/5" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Error Responses
+
+<ResponseField name="400" type="error">
+  Cannot deactivate the main administrator
+</ResponseField>
+
+<ResponseField name="403" type="error">
+  Cannot delete a system user
+</ResponseField>
+
+<ResponseField name="404" type="error">
+  User not found
+</ResponseField>

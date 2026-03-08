@@ -1,0 +1,434 @@
+---
+title: 'Price Lists'
+description: 'Manage custom pricing for customers with price lists'
+---
+
+## Overview
+
+Price Lists allow you to define custom pricing for specific products and assign those prices to customers. This is useful for:
+
+- Wholesale pricing
+- VIP customer discounts
+- Volume-based pricing tiers
+- Special promotions
+
+### How Price Lists Work
+
+1. Create a price list (e.g., "Wholesale Prices")
+2. Assign products with fixed prices to the list
+3. Assign customers to the price list
+4. When selling to those customers, the POS uses the price list price instead of the base price
+
+---
+
+## Create Price List
+
+<api method="POST" endpoint="/price-lists/" />
+
+Creates a new empty price list.
+
+### Request Body
+
+<ParamField body="name" type="string" required>
+  Price list name
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description of the price list purpose
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer">
+  Unique price list identifier
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Price list name
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Price list description
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST "https://api.example.com/price-lists/" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Wholesale Prices",
+    "description": "Special pricing for wholesale customers"
+  }'
+```
+
+---
+
+## List Price Lists
+
+<api method="GET" endpoint="/price-lists/" />
+
+Returns all price lists for the tenant, ordered by name.
+
+### Response
+
+Returns an array of price list objects.
+
+### Example
+
+```bash
+curl -X GET "https://api.example.com/price-lists/" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+---
+
+## Get Price List Detail
+
+<api method="GET" endpoint="/price-lists/{price_list_id}" />
+
+Returns a price list with all its product price assignments.
+
+### Path Parameters
+
+<ParamField path="price_list_id" type="integer" required>
+  The price list ID
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer">
+  Price list identifier
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Price list name
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Price list description
+</ResponseField>
+
+<ResponseField name="items" type="array">
+  Array of product price assignments
+  
+  <ResponseField name="items[].product_id" type="integer">
+    Product ID
+  </ResponseField>
+  
+  <ResponseField name="items[].fixed_price" type="decimal">
+    Fixed price for this product in this list
+  </ResponseField>
+</ResponseField>
+
+### Example
+
+```bash
+curl -X GET "https://api.example.com/price-lists/1" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Response Example
+
+```json
+{
+  "id": 1,
+  "name": "Wholesale Prices",
+  "description": "Special pricing for wholesale customers",
+  "items": [
+    {
+      "product_id": 5,
+      "fixed_price": 45000
+    },
+    {
+      "product_id": 12,
+      "fixed_price": 32000
+    }
+  ]
+}
+```
+
+---
+
+## Update Price List
+
+<api method="PUT" endpoint="/price-lists/{price_list_id}" />
+
+Updates the name and/or description of a price list.
+
+### Path Parameters
+
+<ParamField path="price_list_id" type="integer" required>
+  The price list ID to update
+</ParamField>
+
+### Request Body
+
+<ParamField body="name" type="string">
+  Updated name
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated description
+</ParamField>
+
+### Example
+
+```bash
+curl -X PUT "https://api.example.com/price-lists/1" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Premium Wholesale Prices",
+    "description": "Updated pricing for premium wholesale customers"
+  }'
+```
+
+---
+
+## Delete Price List
+
+<api method="DELETE" endpoint="/price-lists/{price_list_id}" />
+
+Deletes a price list. Customers assigned to this list will have their `price_list_id` set to `NULL`.
+
+### Path Parameters
+
+<ParamField path="price_list_id" type="integer" required>
+  The price list ID to delete
+</ParamField>
+
+### Response
+
+Returns `204 No Content` on success.
+
+### Example
+
+```bash
+curl -X DELETE "https://api.example.com/price-lists/1" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+---
+
+## Assign Products to Price List
+
+<api method="PUT" endpoint="/price-lists/{price_list_id}/products" />
+
+Replaces all product price assignments for a price list. This uses a clear-and-reinsert pattern, making it easy to bulk update prices from the frontend.
+
+### Path Parameters
+
+<ParamField path="price_list_id" type="integer" required>
+  The price list ID
+</ParamField>
+
+### Request Body
+
+<ParamField body="items" type="array" required>
+  Array of product price assignments
+  
+  <ParamField body="items[].product_id" type="integer" required>
+    Product ID to assign
+  </ParamField>
+  
+  <ParamField body="items[].fixed_price" type="decimal" required>
+    Fixed price for this product
+  </ParamField>
+</ParamField>
+
+### Response
+
+Returns the updated price list with all items.
+
+### Example
+
+```bash
+curl -X PUT "https://api.example.com/price-lists/1/products" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {
+        "product_id": 5,
+        "fixed_price": 45000
+      },
+      {
+        "product_id": 12,
+        "fixed_price": 32000
+      },
+      {
+        "product_id": 18,
+        "fixed_price": 28500
+      }
+    ]
+  }'
+```
+
+---
+
+## Assign Customers to Price List
+
+<api method="PUT" endpoint="/price-lists/{price_list_id}/customers" />
+
+Assigns customers to a price list. Customers previously on other lists will be moved to this list. Customers not in the provided list will be unassigned.
+
+### Path Parameters
+
+<ParamField path="price_list_id" type="integer" required>
+  The price list ID
+</ParamField>
+
+### Request Body
+
+<ParamField body="customer_ids" type="array" required>
+  Array of customer IDs to assign to this price list
+</ParamField>
+
+### Response
+
+<ResponseField name="detail" type="string">
+  Success message with count of customers assigned
+</ResponseField>
+
+### Example
+
+```bash
+curl -X PUT "https://api.example.com/price-lists/1/customers" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customer_ids": [10, 15, 22, 33]
+  }'
+```
+
+### Response Example
+
+```json
+{
+  "detail": "4 cliente(s) asignados a la lista 1."
+}
+```
+
+---
+
+## Resolve Price for POS
+
+<api method="GET" endpoint="/price-lists/resolve-price/{product_id}" />
+
+Calculates the final price to apply for a product, considering the customer's assigned price list. This is the core pricing logic used by the POS system.
+
+### Path Parameters
+
+<ParamField path="product_id" type="integer" required>
+  The product ID to price
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="customer_id" type="integer">
+  Optional customer ID. If provided, checks for custom pricing
+</ParamField>
+
+### Response
+
+<ResponseField name="product_id" type="integer">
+  The product ID
+</ResponseField>
+
+<ResponseField name="customer_id" type="integer">
+  The customer ID (if provided)
+</ResponseField>
+
+<ResponseField name="price_list_id" type="integer">
+  The price list ID used (if applicable)
+</ResponseField>
+
+<ResponseField name="resolved_price" type="decimal">
+  The final price to charge
+</ResponseField>
+
+<ResponseField name="source" type="string">
+  Price source: `"price_list"` or `"base_price"`
+</ResponseField>
+
+### Pricing Logic
+
+The system resolves prices in the following priority order:
+
+1. If the customer has a price list assigned AND the product has a fixed price in that list → use the fixed price
+2. Otherwise → use the product's base `precio_neto`
+
+### Example
+
+```bash
+# Get price for product 5 when selling to customer 10
+curl -X GET "https://api.example.com/price-lists/resolve-price/5?customer_id=10" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Response Examples
+
+**With Price List:**
+```json
+{
+  "product_id": 5,
+  "customer_id": 10,
+  "price_list_id": 1,
+  "resolved_price": 45000,
+  "source": "price_list"
+}
+```
+
+**Without Price List (Base Price):**
+```json
+{
+  "product_id": 5,
+  "customer_id": 10,
+  "price_list_id": 1,
+  "resolved_price": 52990,
+  "source": "base_price"
+}
+```
+
+**No Customer (Anonymous Sale):**
+```json
+{
+  "product_id": 5,
+  "resolved_price": 52990,
+  "source": "base_price"
+}
+```
+
+---
+
+## Error Handling
+
+### 404 Not Found
+
+Returned when price list or referenced products/customers don't exist:
+
+```json
+{
+  "detail": "Lista de precios 99 no encontrada."
+}
+```
+
+```json
+{
+  "detail": "Productos no encontrados: [15, 23]"
+}
+```
+
+```json
+{
+  "detail": "Clientes no encontrados: [101, 105]"
+}
+```
+
+```json
+{
+  "detail": "Producto 999 no encontrado o inactivo."
+}
+```

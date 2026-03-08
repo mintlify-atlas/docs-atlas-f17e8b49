@@ -1,0 +1,282 @@
+---
+title: Roles
+description: Role-based access control (RBAC) management for user permissions
+---
+
+The Roles API allows administrators to manage user roles and their associated permissions. Roles define what actions users can perform in the system.
+
+<Note>
+  All role endpoints require administrator privileges.
+</Note>
+
+## List Roles
+
+<api method="GET" url="/api/roles/" />
+
+Returns all available roles in the system with their permissions.
+
+### Response
+
+<ResponseField name="id" type="integer" required>
+  Role unique identifier
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Role name (e.g., ADMINISTRADOR, VENDEDOR)
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description of the role
+</ResponseField>
+
+<ResponseField name="can_manage_users" type="boolean">
+  Permission to create, update, and deactivate users
+</ResponseField>
+
+<ResponseField name="can_view_reports" type="boolean">
+  Permission to access reports and analytics
+</ResponseField>
+
+<ResponseField name="can_edit_products" type="boolean">
+  Permission to manage product catalog
+</ResponseField>
+
+<ResponseField name="can_perform_sales" type="boolean">
+  Permission to process sales transactions
+</ResponseField>
+
+<ResponseField name="can_perform_returns" type="boolean">
+  Permission to process returns and refunds
+</ResponseField>
+
+<ResponseField name="permissions" type="object">
+  Dynamic permissions object for UI/menu access control. Structure: `{"dashboard": true, "pos": true, "inventario": false}`
+</ResponseField>
+
+### Example
+
+```bash
+curl -X GET "https://api.torn.cl/api/roles/" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json
+[
+  {
+    "id": 1,
+    "name": "ADMINISTRADOR",
+    "description": "Administrador con acceso completo",
+    "can_manage_users": true,
+    "can_view_reports": true,
+    "can_edit_products": true,
+    "can_perform_sales": true,
+    "can_perform_returns": true,
+    "permissions": {
+      "dashboard": true,
+      "pos": true,
+      "inventario": true,
+      "reportes": true
+    }
+  },
+  {
+    "id": 2,
+    "name": "VENDEDOR",
+    "description": "Usuario de ventas",
+    "can_manage_users": false,
+    "can_view_reports": false,
+    "can_edit_products": true,
+    "can_perform_sales": true,
+    "can_perform_returns": false,
+    "permissions": {
+      "dashboard": false,
+      "pos": true,
+      "inventario": true,
+      "reportes": false
+    }
+  }
+]
+```
+</ResponseExample>
+
+## Get Role
+
+<api method="GET" url="/api/roles/{role_id}" />
+
+Returns detailed information about a specific role.
+
+### Path Parameters
+
+<ParamField path="role_id" type="integer" required>
+  ID of the role to retrieve
+</ParamField>
+
+### Response
+
+Returns a single role object with the same structure as the list endpoint.
+
+### Example
+
+```bash
+curl -X GET "https://api.torn.cl/api/roles/2" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json
+{
+  "id": 2,
+  "name": "VENDEDOR",
+  "description": "Usuario de ventas",
+  "can_manage_users": false,
+  "can_view_reports": false,
+  "can_edit_products": true,
+  "can_perform_sales": true,
+  "can_perform_returns": false,
+  "permissions": {
+    "dashboard": false,
+    "pos": true,
+    "inventario": true
+  }
+}
+```
+</ResponseExample>
+
+## Update Role
+
+<api method="PUT" url="/api/roles/{role_id}" />
+
+Updates the permissions and configuration of an existing role.
+
+### Path Parameters
+
+<ParamField path="role_id" type="integer" required>
+  ID of the role to update
+</ParamField>
+
+### Request Body
+
+<ParamField body="description" type="string">
+  Updated description of the role
+</ParamField>
+
+<ParamField body="can_manage_users" type="boolean">
+  Permission to manage users
+</ParamField>
+
+<ParamField body="can_view_reports" type="boolean">
+  Permission to view reports
+</ParamField>
+
+<ParamField body="can_edit_products" type="boolean">
+  Permission to edit products
+</ParamField>
+
+<ParamField body="can_perform_sales" type="boolean">
+  Permission to perform sales
+</ParamField>
+
+<ParamField body="can_perform_returns" type="boolean">
+  Permission to perform returns
+</ParamField>
+
+<ParamField body="permissions" type="object">
+  Dynamic permissions object for UI controls
+</ParamField>
+
+<Note>
+  All fields are optional. Only provided fields will be updated.
+</Note>
+
+### Response
+
+Returns the updated role object.
+
+### Example
+
+```bash
+curl -X PUT "https://api.torn.cl/api/roles/2" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Vendedor con permisos de devolución",
+    "can_perform_returns": true,
+    "permissions": {
+      "dashboard": false,
+      "pos": true,
+      "inventario": true,
+      "devoluciones": true
+    }
+  }'
+```
+
+<ResponseExample>
+```json
+{
+  "id": 2,
+  "name": "VENDEDOR",
+  "description": "Vendedor con permisos de devolución",
+  "can_manage_users": false,
+  "can_view_reports": false,
+  "can_edit_products": true,
+  "can_perform_sales": true,
+  "can_perform_returns": true,
+  "permissions": {
+    "dashboard": false,
+    "pos": true,
+    "inventario": true,
+    "devoluciones": true
+  }
+}
+```
+</ResponseExample>
+
+## Permission Structure
+
+The `permissions` field allows for flexible, granular control over UI elements and features:
+
+### Common Permission Keys
+
+- `dashboard` - Access to analytics dashboard
+- `pos` - Point of Sale interface
+- `inventario` - Inventory management
+- `reportes` - Reports and analytics
+- `caja` - Cash session management
+- `configuracion` - System configuration
+- `devoluciones` - Returns and refunds
+- `compras` - Purchase management
+
+### Example Use Cases
+
+**Store Manager Role:**
+```json
+{
+  "can_manage_users": false,
+  "can_view_reports": true,
+  "can_edit_products": true,
+  "can_perform_sales": true,
+  "can_perform_returns": true,
+  "permissions": {
+    "dashboard": true,
+    "pos": true,
+    "inventario": true,
+    "reportes": true,
+    "caja": true
+  }
+}
+```
+
+**Cashier Role:**
+```json
+{
+  "can_manage_users": false,
+  "can_view_reports": false,
+  "can_edit_products": false,
+  "can_perform_sales": true,
+  "can_perform_returns": false,
+  "permissions": {
+    "pos": true,
+    "caja": true
+  }
+}
+```

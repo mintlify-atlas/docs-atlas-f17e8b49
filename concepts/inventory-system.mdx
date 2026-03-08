@@ -1,0 +1,480 @@
+---
+title: Inventory System
+description: Kardex tracking, stock movements, and FIFO/LIFO accounting for complete inventory control
+icon: boxes-stacked
+---
+
+## Overview
+
+Torn implements a **Kardex-based inventory system** with immutable stock movement records. Every inventory change—whether from sales, purchases, adjustments, or returns—generates a permanent audit trail in the `stock_movements` table.
+
+<Note>
+  The system supports both FIFO (First In, First Out) and LIFO (Last In, First Out) cost accounting methods, configurable per tenant.
+</Note>
+
+## Kardex Method
+
+From INFORME_TECNICO.md:42:
+
+> **Descuento de inventario (FIFO/LIFO según config DB).**
+> **Registro de movimientos de kardex (`StockMovement`).**
+
+Kardex is a perpetual inventory method that tracks:
+- **Date and time** of each movement
+- **Type** (entry or exit)
+- **Reason** (sale, purchase, adjustment, return)
+- **Quantity** moved
+- **Balance after** the movement
+- **User** who performed the action
+
+## Data Model
+
+### Product Model
+
+The product model includes inventory control fields:
+
+```python app/models/product.py
+class Product(Base):
+    """Modelo de Producto o Servicio.
+
+    Soporta control de inventario y variantes jerárquicas.
+    """
+    __tablename__ = "products"
+
+    id = Column(Integer, primary_key=True)
+    codigo_interno = Column(String(50), unique=True, nullable=False)
+    nombre = Column(String(200), nullable=False)
+    precio_neto = Column(Numeric(15, 2), nullable=False)
+    costo_unitario = Column(Numeric(15, 2), default=0)
+    
+    # Inventory Control
+    codigo_barras = Column(String(100), index=True)
+    controla_stock = Column(Boolean, default=False)
+    stock_actual = Column(Numeric(15, 4), default=0)
+    stock_minimo = Column(Numeric(15, 4), default=0)
+    
+    is_active = Column(Boolean, default=True)
+```
+
+<Info>
+  Setting `controla_stock=True` enables inventory tracking for a product. Services or non-tracked items can have this disabled.
+</Info>
+
+### Stock Movement Model
+
+Every inventory change creates a `StockMovement` record:
+
+```python app/models/inventory.py
+class StockMovement(Base):
+    """Movimiento de Inventario (Kardex).
+
+    Registro inmutable de cada cambio en el stock de un producto.
+    Permite trazabilidad completa y auditoría de inventario.
+    """
+    __tablename__ = "stock_movements"
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    tipo = Column(String(20), nullable=False, comment="ENTRADA | SALIDA")
+    motivo = Column(String(50), nullable=False, 
+                   comment="VENTA | COMPRA | AJUSTE | INICIAL")
+    cantidad = Column(Numeric(15, 4), nullable=False)
+    
+    fecha = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Auditoría y Trazabilidad
+    balance_after = Column(Numeric(15, 4), nullable=True)
+    description = Column(String(255), nullable=True)
+
+    # Referencias
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
+    
+    # Relaciones
+    product = relationship("app.models.product.Product", 
+                          backref="stock_movements")
+    user = relationship("app.models.user.User")
+    sale = relationship("app.models.sale.Sale", 
+                       backref="stock_movements")
+```
+
+## Movement Types and Reasons
+
+### Movement Types (tipo)
+
+| Type | Description |
+|------|-------------|
+| `ENTRADA` | Stock increase (purchases, returns, adjustments up) |
+| `SALIDA` | Stock decrease (sales, adjustments down) |
+
+### Movement Reasons (motivo)
+
+| Reason | Use Case |
+|--------|----------|
+| `VENTA` | Sale to customer |
+| `COMPRA` | Purchase from supplier |
+| `DEVOLUCION` | Customer return (restock) |
+| `AJUSTE` | Manual inventory adjustment |
+| `INICIAL` | Initial stock load |
+| `TRASPASO` | Transfer between warehouses (future) |
+
+## Stock Deduction (Sales)
+
+### Validation and Deduction
+
+During sale processing, stock is validated and decremented:
+
+```python app/routers/sales.py
+for item in sale_in.items:
+    product = db.query(Product).filter(
+        Product.id == item.product_id
+    ).first()
+    
+    # Validate Stock
+    if product.controla_stock:
+        if product.stock_actual < item.cantidad:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Stock insuficiente para {product.nombre}. "
+                       f"Disponible: {product.stock_actual}, "
+                       f"Solicitado: {item.cantidad}"
+            )
+        
+        # Decrement Stock
+        product.stock_actual -= item.cantidad
+        
+        # Create Movement Record
+        from app.models.inventory import StockMovement
+        
+        movement = StockMovement(
+            product_id=product.id,
+            user_id=seller_id_to_use,
+            tipo="SALIDA",
+            motivo="VENTA",
+            cantidad=item.cantidad,
+            description=f"Venta en proceso", 
+        )
+        stock_movements.append(movement)
+```
+
+<Warning>
+  Stock validation happens **before** any database writes. If any product has insufficient stock, the entire transaction is aborted.
+</Warning>
+
+### Linking to Sales
+
+Movements are automatically linked to the sale:
+
+```python app/routers/sales.py
+new_sale = Sale(
+    customer_id=customer.id,
+    folio=nuevo_folio,
+    tipo_dte=tipo,
+    monto_neto=total_neto,
+    details=sale_details,
+    stock_movements=stock_movements,  # Automatic linkage
+)
+db.add(new_sale)
+db.flush()
+```
+
+The `sale_id` foreign key is automatically populated by SQLAlchemy's relationship handling.
+
+## Stock Reentry (Returns)
+
+### Reverse Movement for Returns
+
+From INFORME_TECNICO.md:56:
+
+> - Reingresar stock automáticamente con motivo "DEVOLUCION".
+
+When processing returns:
+
+```python app/routers/sales.py
+for item in return_in.items:
+    product = db.query(Product).get(item.product_id)
+    
+    # Restock Inventory
+    if product.controla_stock:
+        product.stock_actual += item.cantidad
+        
+        from app.models.inventory import StockMovement
+        movement = StockMovement(
+            product_id=product.id,
+            user_id=user_id,
+            tipo="ENTRADA",
+            motivo="DEVOLUCION",
+            cantidad=item.cantidad,
+            description=f"Devolución venta f.{original_sale.folio}: {return_in.reason}"
+        )
+        stock_movements.append(movement)
+```
+
+<Info>
+  Returns create **new** movements rather than deleting the original sale movements, preserving the complete audit trail.
+</Info>
+
+## FIFO/LIFO Accounting
+
+### Cost Basis Tracking
+
+While Torn's current implementation tracks quantity movements, FIFO/LIFO accounting requires tracking cost layers:
+
+```python
+# Future enhancement: Cost layer tracking
+class StockLayer(Base):
+    """Cost layer for FIFO/LIFO accounting."""
+    __tablename__ = "stock_layers"
+    
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"))
+    movement_id = Column(Integer, ForeignKey("stock_movements.id"))
+    
+    cantidad_restante = Column(Numeric(15, 4))
+    costo_unitario = Column(Numeric(15, 2))
+    fecha_ingreso = Column(DateTime(timezone=True))
+```
+
+### FIFO Logic
+
+First In, First Out assumes oldest inventory is sold first:
+
+```python
+# FIFO cost calculation (conceptual)
+def calculate_cogs_fifo(product_id: int, cantidad: Decimal) -> Decimal:
+    """Calculate Cost of Goods Sold using FIFO."""
+    layers = db.query(StockLayer).filter(
+        StockLayer.product_id == product_id,
+        StockLayer.cantidad_restante > 0
+    ).order_by(StockLayer.fecha_ingreso.asc()).all()
+    
+    cogs = Decimal(0)
+    remaining = cantidad
+    
+    for layer in layers:
+        take = min(remaining, layer.cantidad_restante)
+        cogs += take * layer.costo_unitario
+        layer.cantidad_restante -= take
+        remaining -= take
+        
+        if remaining == 0:
+            break
+    
+    return cogs
+```
+
+### LIFO Logic
+
+Last In, First Out assumes newest inventory is sold first:
+
+```python
+# LIFO cost calculation (conceptual)
+def calculate_cogs_lifo(product_id: int, cantidad: Decimal) -> Decimal:
+    """Calculate Cost of Goods Sold using LIFO."""
+    layers = db.query(StockLayer).filter(
+        StockLayer.product_id == product_id,
+        StockLayer.cantidad_restante > 0
+    ).order_by(StockLayer.fecha_ingreso.desc()).all()  # Descending
+    
+    # Same logic as FIFO but with reversed layer order
+    # ...
+```
+
+<Note>
+  The current Torn implementation uses weighted average cost (`costo_unitario` in the Product model). Full FIFO/LIFO requires implementing the `StockLayer` model shown above.
+</Note>
+
+## Inventory Adjustments
+
+Manual adjustments for physical inventory counts:
+
+```python
+@router.post("/inventory/adjust")
+def adjust_inventory(
+    adjustment: InventoryAdjustment,
+    db: Session = Depends(get_tenant_db),
+    user: User = Depends(get_current_user)
+):
+    """Manual inventory adjustment."""
+    product = db.query(Product).get(adjustment.product_id)
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    
+    # Calculate difference
+    old_stock = product.stock_actual
+    difference = adjustment.new_quantity - old_stock
+    
+    if difference == 0:
+        return {"message": "Sin cambios"}
+    
+    # Update stock
+    product.stock_actual = adjustment.new_quantity
+    
+    # Create movement
+    movement = StockMovement(
+        product_id=product.id,
+        user_id=user.id,
+        tipo="ENTRADA" if difference > 0 else "SALIDA",
+        motivo="AJUSTE",
+        cantidad=abs(difference),
+        balance_after=adjustment.new_quantity,
+        description=adjustment.reason
+    )
+    db.add(movement)
+    db.commit()
+    
+    return {"old_stock": old_stock, "new_stock": adjustment.new_quantity}
+```
+
+## Inventory Queries
+
+### Current Stock Levels
+
+```python
+# Products with low stock
+low_stock = db.query(Product).filter(
+    Product.controla_stock == True,
+    Product.stock_actual <= Product.stock_minimo
+).all()
+```
+
+### Movement History for a Product
+
+```python
+# Last 30 days of movements
+from datetime import datetime, timedelta
+
+movements = db.query(StockMovement).filter(
+    StockMovement.product_id == product_id,
+    StockMovement.fecha >= datetime.now() - timedelta(days=30)
+).order_by(StockMovement.fecha.desc()).all()
+```
+
+### Kardex Report
+
+Generate a traditional Kardex report:
+
+```python
+def generate_kardex(product_id: int, start_date, end_date):
+    """Generate Kardex report for a product."""
+    movements = db.query(StockMovement).filter(
+        StockMovement.product_id == product_id,
+        StockMovement.fecha.between(start_date, end_date)
+    ).order_by(StockMovement.fecha.asc()).all()
+    
+    # Calculate running balance
+    balance = 0
+    kardex_lines = []
+    
+    for m in movements:
+        if m.tipo == "ENTRADA":
+            balance += m.cantidad
+        else:
+            balance -= m.cantidad
+        
+        kardex_lines.append({
+            "fecha": m.fecha,
+            "tipo": m.tipo,
+            "motivo": m.motivo,
+            "cantidad": m.cantidad,
+            "balance": balance,
+            "usuario": m.user.full_name if m.user else "Sistema"
+        })
+    
+    return kardex_lines
+```
+
+## Batch Movements
+
+For bulk operations like importing stock:
+
+```python
+@router.post("/inventory/batch-adjust")
+def batch_adjust_inventory(
+    adjustments: List[InventoryAdjustment],
+    db: Session = Depends(get_tenant_db),
+    user: User = Depends(get_current_user)
+):
+    """Bulk inventory adjustments."""
+    movements = []
+    
+    for adj in adjustments:
+        product = db.query(Product).get(adj.product_id)
+        if not product:
+            continue
+        
+        difference = adj.new_quantity - product.stock_actual
+        if difference == 0:
+            continue
+        
+        product.stock_actual = adj.new_quantity
+        
+        movement = StockMovement(
+            product_id=product.id,
+            user_id=user.id,
+            tipo="ENTRADA" if difference > 0 else "SALIDA",
+            motivo="AJUSTE",
+            cantidad=abs(difference),
+            description=f"Ajuste masivo: {adj.reason}"
+        )
+        movements.append(movement)
+    
+    db.bulk_save_objects(movements)
+    db.commit()
+    
+    return {"processed": len(movements)}
+```
+
+## Stock Alerts
+
+### Low Stock Notification
+
+```python
+def get_low_stock_products(db: Session) -> List[Product]:
+    """Get products below minimum stock level."""
+    return db.query(Product).filter(
+        Product.controla_stock == True,
+        Product.is_active == True,
+        Product.stock_actual <= Product.stock_minimo
+    ).all()
+```
+
+### Out of Stock
+
+```python
+def get_out_of_stock_products(db: Session) -> List[Product]:
+    """Get products with zero stock."""
+    return db.query(Product).filter(
+        Product.controla_stock == True,
+        Product.is_active == True,
+        Product.stock_actual <= 0
+    ).all()
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Never Delete Movements" icon="ban">
+    Stock movements are **immutable**. To correct errors, create a new adjustment movement with the opposite effect.
+  </Card>
+  
+  <Card title="Always Set balance_after" icon="calculator">
+    Store the resulting stock level in `balance_after` for quick auditing and reconciliation.
+  </Card>
+  
+  <Card title="Link to Source Documents" icon="link">
+    Use `sale_id`, `purchase_id`, etc., to maintain traceability between movements and business transactions.
+  </Card>
+  
+  <Card title="Implement Stock Alerts" icon="bell">
+    Monitor `stock_actual <= stock_minimo` and send notifications to prevent stockouts.
+  </Card>
+</CardGroup>
+
+## Related Concepts
+
+- [POS Workflow](/concepts/pos-workflow) - How inventory integrates with sales
+- [Purchase Management](/api/purchases) - Restocking inventory
+- [Product Catalog](/api/products) - Product setup and variants

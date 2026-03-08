@@ -1,0 +1,545 @@
+---
+title: "Inventory Management"
+description: "Complete guide to managing stock, tracking movements, and maintaining inventory accuracy in Torn POS"
+---
+
+## Overview
+
+Torn implements a **Kardex-based inventory system** with immutable stock movements for complete traceability. Every inventory change is recorded as a `StockMovement` with timestamp, user, and reason.
+
+## Architecture
+
+### Product Stock Control
+
+Products have two key inventory fields:
+
+```python
+class Product:
+    controla_stock: bool = False      # Enable/disable stock tracking
+    stock_actual: Decimal = 0         # Current available quantity
+    stock_minimo: Decimal = 0         # Reorder point threshold
+```
+
+Source: Referenced in `/app/models/product.py`
+
+<Note>
+Only products with `controla_stock = true` will have stock validation during sales. Non-tracked products (services, digital goods) can be sold without quantity limits.
+</Note>
+
+### Stock Movement Model
+
+Every inventory transaction creates an immutable audit record:
+
+```python
+class StockMovement:
+    product_id: int                   # Product affected
+    user_id: int                      # Who made the change
+    tipo: str                         # "ENTRADA" or "SALIDA"
+    motivo: str                       # "VENTA", "COMPRA", "AJUSTE", "DEVOLUCION", "INICIAL"
+    cantidad: Decimal                 # Absolute quantity
+    fecha: datetime                   # Timestamp
+    balance_after: Decimal            # Stock snapshot after movement
+    description: str                  # Free-text explanation
+    sale_id: int                      # Link to sale if applicable
+```
+
+Source: `/app/models/inventory.py:10-54`
+
+## Checking Inventory Levels
+
+Retrieve current stock for all active products:
+
+```bash
+curl -X GET https://api.torn.cl/inventory/ \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 15,
+    "codigo_interno": "MART-001",
+    "nombre": "Martillo Carpintero",
+    "precio_neto": 8500.00,
+    "controla_stock": true,
+    "stock_actual": 47.00,
+    "stock_minimo": 10.00,
+    "unidad_medida": "unidad",
+    "is_active": true
+  },
+  {
+    "id": 42,
+    "codigo_interno": "TAL-042",
+    "nombre": "Taladro Eléctrico",
+    "precio_neto": 12411.76,
+    "controla_stock": true,
+    "stock_actual": 8.00,
+    "stock_minimo": 5.00,
+    "unidad_medida": "unidad",
+    "is_active": true
+  },
+  {
+    "id": 73,
+    "codigo_interno": "SERV-001",
+    "nombre": "Instalación",
+    "precio_neto": 25000.00,
+    "controla_stock": false,
+    "stock_actual": 0,
+    "unidad_medida": "servicio",
+    "is_active": true
+  }
+]
+```
+
+Source: `/app/routers/inventory.py:15-32`
+
+<Tip>
+Implement low-stock alerts by filtering products where `stock_actual <= stock_minimo`.
+</Tip>
+
+## Automatic Stock Management
+
+### During Sales (SALIDA)
+
+When a sale is created, inventory is automatically decremented:
+
+```python
+if product.controla_stock:
+    # 1. Validate sufficient stock
+    if product.stock_actual < item.cantidad:
+        raise HTTPException(status_code=409, detail="Stock insuficiente")
+    
+    # 2. Deduct stock
+    product.stock_actual -= item.cantidad
+    
+    # 3. Create movement record
+    movement = StockMovement(
+        product_id=product.id,
+        user_id=seller_id,
+        tipo="SALIDA",
+        motivo="VENTA",
+        cantidad=item.cantidad,
+        description=f"Venta en proceso"
+    )
+    stock_movements.append(movement)
+```
+
+Source: `/app/routers/sales.py:162-184`
+
+<Warning>
+Stock deduction happens **before** payment processing to prevent overselling in concurrent transactions.
+</Warning>
+
+### During Returns (ENTRADA)
+
+When products are returned, stock is replenished:
+
+```python
+if product.controla_stock:
+    # 1. Add stock back
+    product.stock_actual += item.cantidad
+    
+    # 2. Create return movement
+    movement = StockMovement(
+        product_id=product.id,
+        user_id=user_id,
+        tipo="ENTRADA",
+        motivo="DEVOLUCION",
+        cantidad=item.cantidad,
+        description=f"Devolución venta f.{original_sale.folio}: {return_reason}"
+    )
+    stock_movements.append(movement)
+```
+
+Source: `/app/routers/sales.py:370-381`
+
+## Manual Stock Adjustments
+
+For inventory corrections, purchases, or initial stock loading, use the stock movement endpoints:
+
+### Recording a Stock Entry (Purchase/Adjustment)
+
+<Steps>
+
+<Step title="Create a Purchase Record">
+If receiving stock from a supplier, first create a purchase:
+
+```bash
+curl -X POST https://api.torn.cl/purchases/ \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider_id": 5,
+    "tipo_documento": "FACTURA",
+    "numero_documento": "F-12345",
+    "fecha_emision": "2026-03-08",
+    "items": [
+      {
+        "product_id": 15,
+        "cantidad": 100,
+        "precio_unitario": 6500.00
+      },
+      {
+        "product_id": 42,
+        "cantidad": 25,
+        "precio_unitario": 10000.00
+      }
+    ]
+  }'
+```
+
+This automatically:
+- Increments `stock_actual` for each product
+- Creates `ENTRADA` movements with `motivo = "COMPRA"`
+- Links movements to the purchase record
+</Step>
+
+<Step title="Direct Stock Adjustment (Inventory Count)">
+For corrections without a purchase document:
+
+```bash
+# Note: This endpoint would need to be implemented
+# Current implementation handles adjustments through purchases
+
+curl -X POST https://api.torn.cl/inventory/adjust \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "product_id": 15,
+    "tipo": "ENTRADA",
+    "cantidad": 10,
+    "motivo": "AJUSTE",
+    "description": "Inventario físico - encontradas 10 unidades no registradas"
+  }'
+```
+</Step>
+
+</Steps>
+
+<Note>
+The current Torn implementation handles inventory entries primarily through the purchases module. Direct adjustment endpoints should be added for full inventory management capabilities.
+</Note>
+
+## Tracking Stock History (Kardex)
+
+View all movements for a specific product to trace its inventory history:
+
+```bash
+# Query using product ID filter (implementation may vary)
+curl -X GET "https://api.torn.cl/inventory/movements?product_id=15&limit=50" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Expected Response:**
+```json
+[
+  {
+    "id": 1523,
+    "product_id": 15,
+    "user_id": 8,
+    "tipo": "SALIDA",
+    "motivo": "VENTA",
+    "cantidad": 2.00,
+    "fecha": "2026-03-08T14:23:15Z",
+    "balance_after": 45.00,
+    "description": "Venta en proceso",
+    "sale_id": 1523,
+    "user": {
+      "full_name": "Juan Pérez",
+      "email": "cajero@store.cl"
+    }
+  },
+  {
+    "id": 1489,
+    "product_id": 15,
+    "user_id": 3,
+    "tipo": "ENTRADA",
+    "motivo": "COMPRA",
+    "cantidad": 100.00,
+    "fecha": "2026-03-05T09:15:30Z",
+    "balance_after": 147.00,
+    "description": "Compra OC-2024-234",
+    "sale_id": null
+  },
+  {
+    "id": 1452,
+    "product_id": 15,
+    "user_id": 1,
+    "tipo": "ENTRADA",
+    "motivo": "INICIAL",
+    "cantidad": 47.00,
+    "fecha": "2026-03-01T08:00:00Z",
+    "balance_after": 47.00,
+    "description": "Stock inicial al migrar sistema"
+  }
+]
+```
+
+## Movement Types and Reasons
+
+### Movement Types (tipo)
+
+| Type | Description |
+|------|-------------|
+| `ENTRADA` | Stock increase (purchase, return, adjustment up) |
+| `SALIDA` | Stock decrease (sale, damage, adjustment down) |
+
+### Movement Reasons (motivo)
+
+| Reason | When Used | Typical Type |
+|--------|-----------|-------------|
+| `VENTA` | Product sold to customer | SALIDA |
+| `COMPRA` | Product received from supplier | ENTRADA |
+| `DEVOLUCION` | Product returned by customer | ENTRADA |
+| `AJUSTE` | Manual inventory correction | Either |
+| `INICIAL` | Initial stock when setting up system | ENTRADA |
+| `MERMA` | Shrinkage, damage, theft | SALIDA |
+| `TRASLADO` | Transfer between warehouses | Either |
+
+Source: `/app/models/inventory.py:35`
+
+<Tip>
+Consistent use of `motivo` codes enables powerful inventory analytics: sales velocity, return rates, shrinkage tracking, etc.
+</Tip>
+
+## Low Stock Alerts
+
+Implement client-side alerts by comparing stock levels:
+
+```javascript
+// Example: Filter products needing reorder
+const lowStockProducts = inventory.filter(
+  product => product.controla_stock && 
+             product.stock_actual <= product.stock_minimo
+);
+
+// Alert critical items (out of stock)
+const outOfStock = inventory.filter(
+  product => product.controla_stock && 
+             product.stock_actual <= 0
+);
+```
+
+<Card title="Reorder Point Strategy" icon="chart-line">
+Set `stock_minimo` based on:
+- Average daily sales velocity
+- Supplier lead time
+- Safety stock buffer
+- Criticality of product
+
+Formula: `stock_minimo = (daily_sales × lead_time_days) + safety_stock`
+</Card>
+
+## Inventory Valuation
+
+Calculate total inventory value:
+
+```python
+# Query with product details
+total_value = sum(
+    product.stock_actual * product.precio_costo 
+    for product in inventory 
+    if product.controla_stock
+)
+```
+
+<Note>
+Torn tracks selling price (`precio_neto`) by default. For accurate valuation, ensure you also track `precio_costo` (cost price) in your product model.
+</Note>
+
+## Stock Transfer Between Locations
+
+For multi-location warehouses, implement transfers:
+
+<Steps>
+
+<Step title="Create SALIDA at Origin">
+```python
+movement_out = StockMovement(
+    product_id=product_id,
+    user_id=current_user_id,
+    tipo="SALIDA",
+    motivo="TRASLADO",
+    cantidad=quantity,
+    description=f"Transferencia a {destination_warehouse}"
+)
+```
+</Step>
+
+<Step title="Create ENTRADA at Destination">
+```python
+movement_in = StockMovement(
+    product_id=product_id,
+    user_id=current_user_id,
+    tipo="ENTRADA",
+    motivo="TRASLADO",
+    cantidad=quantity,
+    description=f"Recepción desde {origin_warehouse}"
+)
+```
+</Step>
+
+<Step title="Link Movements">
+Store a reference to correlate the transfer:
+```python
+transfer_id = str(uuid.uuid4())
+movement_out.description += f" [Transfer: {transfer_id}]"
+movement_in.description += f" [Transfer: {transfer_id}]"
+```
+</Step>
+
+</Steps>
+
+<Warning>
+The current Torn schema assumes single-location inventory. Multi-warehouse support requires extending the `products` and `stock_movements` tables with location fields.
+</Warning>
+
+## Physical Inventory Counts
+
+Reconcile physical counts with system records:
+
+<Steps>
+
+<Step title="Perform Physical Count">
+Count actual quantities on shelves/warehouse.
+</Step>
+
+<Step title="Compare with System">
+```bash
+curl -X GET https://api.torn.cl/inventory/ \
+  -H "Authorization: Bearer YOUR_TOKEN" > current_stock.json
+```
+</Step>
+
+<Step title="Create Adjustment Movements">
+For each discrepancy:
+
+```python
+discrepancy = physical_count - system_stock
+
+if discrepancy > 0:
+    tipo = "ENTRADA"
+    description = f"Ajuste inventario físico: sobrante de {discrepancy}"
+else:
+    tipo = "SALIDA"
+    description = f"Ajuste inventario físico: faltante de {abs(discrepancy)}"
+
+movement = StockMovement(
+    product_id=product_id,
+    tipo=tipo,
+    motivo="AJUSTE",
+    cantidad=abs(discrepancy),
+    description=description
+)
+```
+</Step>
+
+</Steps>
+
+<Tip>
+Perform physical counts regularly (monthly/quarterly) to maintain inventory accuracy and identify shrinkage patterns.
+</Tip>
+
+## Integration with Sales
+
+The sales process automatically handles inventory:
+
+1. **Validation**: Checks `stock_actual >= cantidad` for all items
+2. **Reservation**: Decrements stock **before** payment confirmation
+3. **Audit**: Creates linked `StockMovement` records with `sale_id`
+4. **Atomicity**: Rolls back inventory changes if payment/DTE fails
+
+See the [Sales Process Guide](/guides/sales-process) for complete flow.
+
+## Integration with Returns
+
+Returns automatically restore inventory:
+
+1. **Stock Return**: Increments `stock_actual` by returned quantity
+2. **Movement**: Creates `ENTRADA` with `motivo = "DEVOLUCION"`
+3. **Traceability**: Links to original sale via `related_sale_id`
+
+See the [Returns & Refunds Guide](/guides/returns-refunds) for details.
+
+## Reporting and Analytics
+
+### Stock Value Report
+
+```sql
+SELECT 
+  p.codigo_interno,
+  p.nombre,
+  p.stock_actual,
+  p.precio_costo,
+  (p.stock_actual * p.precio_costo) AS valor_total
+FROM products p
+WHERE p.controla_stock = true
+  AND p.is_active = true
+ORDER BY valor_total DESC;
+```
+
+### Sales Velocity (Last 30 Days)
+
+```sql
+SELECT 
+  p.codigo_interno,
+  p.nombre,
+  p.stock_actual,
+  SUM(sd.cantidad) AS unidades_vendidas,
+  AVG(sd.cantidad) AS promedio_por_venta
+FROM products p
+JOIN sale_details sd ON sd.product_id = p.id
+JOIN sales s ON s.id = sd.sale_id
+WHERE s.fecha_emision >= NOW() - INTERVAL '30 days'
+  AND p.controla_stock = true
+GROUP BY p.id
+ORDER BY unidades_vendidas DESC;
+```
+
+### Shrinkage Analysis
+
+```sql
+SELECT 
+  p.codigo_interno,
+  p.nombre,
+  SUM(sm.cantidad) AS total_merma,
+  COUNT(*) AS eventos_merma
+FROM stock_movements sm
+JOIN products p ON p.id = sm.product_id
+WHERE sm.tipo = 'SALIDA'
+  AND sm.motivo = 'MERMA'
+  AND sm.fecha >= NOW() - INTERVAL '90 days'
+GROUP BY p.id
+ORDER BY total_merma DESC;
+```
+
+## Best Practices
+
+<Card title="Enable Stock Control Selectively" icon="toggle-on">
+Only enable `controla_stock` for physical products. Keep it `false` for:
+- Services (installation, consulting)
+- Digital products (licenses, downloads)
+- Non-inventoried items (custom orders)
+</Card>
+
+<Card title="Immutable Kardex" icon="lock">
+Never delete or modify `StockMovement` records. If you need to correct an error, create a new offsetting movement with `motivo = "AJUSTE"`.
+</Card>
+
+<Card title="Descriptive Movement Notes" icon="file-text">
+Always provide clear `description` values:
+- Reference external documents ("OC-2024-456", "Guía 789")
+- Explain adjustments ("Inventario físico trim Q1")
+- Link to sales ("Venta folio 1234")
+</Card>
+
+<Card title="Regular Audits" icon="calendar-check">
+Schedule periodic physical inventory counts and reconcile with system records. Document all discrepancies.
+</Card>
+
+## Related Guides
+
+- [Sales Process](/guides/sales-process) - How sales affect inventory
+- [Returns & Refunds](/guides/returns-refunds) - Restocking returned items
+- Product Management - Creating and configuring products

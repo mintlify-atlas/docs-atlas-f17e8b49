@@ -1,0 +1,582 @@
+---
+title: "Installation"
+description: "Complete installation guide for Torn"
+---
+
+# Installation
+
+This guide covers the complete installation process for Torn, including backend, frontend, and database setup for both development and production environments.
+
+## System Requirements
+
+### Minimum Requirements
+
+- **Python**: 3.8 or higher
+- **Node.js**: 16.x or higher
+- **PostgreSQL**: 12.x or higher
+- **RAM**: 2GB minimum (4GB recommended)
+- **Storage**: 1GB for application + database storage
+
+### Operating Systems
+
+Torn has been tested on:
+- Ubuntu 20.04+ (recommended for production)
+- macOS 11+
+- Windows 10+ (with WSL2 for best experience)
+
+## Backend Installation
+
+The backend is built with FastAPI and uses PostgreSQL for data persistence.
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/your-org/torn.git
+cd torn
+```
+
+### 2. Set Up Python Virtual Environment
+
+<Warning>
+On Ubuntu, **do not** install Uvicorn via `apt`. Always use the project's virtual environment to ensure version compatibility.
+</Warning>
+
+Create and activate a virtual environment:
+
+<CodeGroup>
+
+```bash Linux/macOS
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+```bash Windows
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+</CodeGroup>
+
+You should see `(.venv)` prefix in your terminal prompt.
+
+### 3. Install Python Dependencies
+
+Install all required packages from `requirements.txt`:
+
+```bash
+pip install -r requirements.txt
+```
+
+#### Core Dependencies
+
+The backend uses these key packages:
+
+| Package | Version | Purpose |
+|---------|---------|----------|
+| `fastapi` | ≥0.115.0 | Web framework for building APIs |
+| `uvicorn[standard]` | ≥0.32.0 | ASGI server with performance extras |
+| `sqlalchemy` | ≥2.0.0 | ORM for database operations |
+| `pydantic` | ≥2.0.0 | Data validation and serialization |
+| `psycopg2-binary` | ≥2.9.0 | PostgreSQL database adapter |
+| `python-dotenv` | ≥1.0.0 | Environment variable management |
+| `jinja2` | ≥3.1.0 | Template engine for HTML/XML generation |
+
+### 4. Configure Environment Variables
+
+Create a `.env` file in the project root with your configuration:
+
+```bash .env
+# Database Configuration
+TORN_DB_USER=postgres
+TORN_DB_PASSWORD=postgres
+TORN_DB_HOST=localhost
+TORN_DB_PORT=5432
+TORN_DB_NAME=torn_db
+```
+
+<Note>
+A template file `.env.example` is provided in the repository. Copy it to get started:
+```bash
+cp .env.example .env
+```
+Then edit the values to match your environment.
+</Note>
+
+#### Production Environment Variables
+
+For production deployments, consider these additional settings:
+
+```bash .env
+# Production Settings
+TORN_ENV=production
+TORN_DEBUG=false
+
+# Security
+TORN_SECRET_KEY=your-secret-key-here
+TORN_ALLOWED_HOSTS=yourdomain.com,www.yourdomain.com
+
+# Database (use secure credentials)
+TORN_DB_USER=torn_prod
+TORN_DB_PASSWORD=<strong-password>
+TORN_DB_HOST=db.yourdomain.com
+TORN_DB_PORT=5432
+TORN_DB_NAME=torn_production
+
+# SSL/TLS
+TORN_DB_SSL_MODE=require
+```
+
+### 5. Set Up PostgreSQL Database
+
+#### Local Development
+
+Connect to PostgreSQL and create the database:
+
+```bash
+psql -U postgres
+```
+
+```sql
+CREATE DATABASE torn_db;
+CREATE USER torn WITH PASSWORD 'torn';
+GRANT ALL PRIVILEGES ON DATABASE torn_db TO torn;
+\q
+```
+
+#### Verify Connection
+
+Test that you can connect with the credentials:
+
+```bash
+psql -U torn -d torn_db -h localhost
+```
+
+#### Production Setup
+
+For production, use a managed PostgreSQL service (AWS RDS, Google Cloud SQL, etc.) or configure PostgreSQL with:
+
+- SSL/TLS encryption
+- Connection pooling (PgBouncer)
+- Regular automated backups
+- Monitoring and alerting
+
+### 6. Initialize the Database
+
+When you start the FastAPI application for the first time, it automatically creates all necessary tables:
+
+```python
+# From app/main.py
+@app.on_event("startup")
+def on_startup():
+    """Crear tablas en la BD (si no existen) al iniciar la app."""
+    Base.metadata.create_all(bind=engine)
+```
+
+Start the backend to trigger initialization:
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+You should see:
+```
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process
+INFO:     Started server process
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+```
+
+### 7. Load Reference Data (Optional)
+
+For Chilean tax compliance, load the ACTECO catalog (economic activity codes):
+
+```bash
+python scripts/seed_actecos.py
+```
+
+This script:
+1. Reads `data/actecos_sii.json` with official SII codes
+2. Checks for existing codes to avoid duplicates
+3. Inserts new codes into the `public.actecos` table
+4. Reports the number of codes added
+
+Expected output:
+```
+Insertados 847 códigos ACTECO. Total en BD: 847
+```
+
+## Frontend Installation
+
+The frontend is a standalone Next.js application located in the `frontend/` directory.
+
+### 1. Navigate to Frontend Directory
+
+```bash
+cd frontend
+```
+
+### 2. Install Node.js Dependencies
+
+Choose your preferred package manager:
+
+<CodeGroup>
+
+```bash npm
+npm install
+```
+
+```bash yarn
+yarn install
+```
+
+```bash pnpm
+pnpm install
+```
+
+</CodeGroup>
+
+<Note>
+The frontend dependencies are **independent** from the backend. All packages install to `frontend/node_modules`.
+</Note>
+
+#### Key Dependencies
+
+The frontend uses modern React tools and libraries:
+
+| Package | Version | Purpose |
+|---------|---------|----------|
+| `next` | 16.1.6 | React framework with SSR/SSG |
+| `react` | 19.2.3 | UI library |
+| `axios` | 1.13.5 | HTTP client for API calls |
+| `@radix-ui/*` | Various | Accessible UI components |
+| `tailwindcss` | 4.x | Utility-first CSS |
+| `zustand` | 5.0.11 | State management |
+| `react-hook-form` | 7.71.1 | Form handling |
+| `zod` | 4.3.6 | Schema validation |
+| `recharts` | 3.7.0 | Charts and analytics |
+
+### 3. Configure Frontend Environment
+
+The frontend connects to the backend API at `http://localhost:8000` by default. For custom configurations, create `frontend/.env.local`:
+
+```bash frontend/.env.local
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+### 4. Start the Development Server
+
+```bash
+npm run dev
+```
+
+The frontend will start on `http://localhost:3000`.
+
+<Warning>
+**Important**: For the frontend to load data (Clients, Inventory, POS, etc.), the **backend must be running** on port 8000. Otherwise, you'll see an error:
+
+*"No se pudo conectar al servidor. ¿Está el backend en marcha? (puerto 8000)"*
+</Warning>
+
+### 5. Build for Production
+
+To create an optimized production build:
+
+```bash
+npm run build
+npm start
+```
+
+This generates static assets in `.next/` and starts the production server.
+
+## Running Both Services
+
+### Development Mode
+
+For local development, use the convenience script that manages both services:
+
+```bash
+# From project root
+python run.py
+```
+
+This script (`run.py`):
+
+1. **Clears ports** 8000 and 3000 using `fuser -k` (Linux)
+2. **Starts backend** with `uvicorn app.main:app --reload --port 8000`
+3. **Starts frontend** with `npm run dev` in the `frontend/` directory
+4. **Streams logs** from both services with color-coded prefixes:
+   - 🔵 `[FastAPI]` - Backend logs
+   - 🟡 `[Next.JS]` - Frontend logs
+   - 🟢 `[SISTEMA]` - System messages
+5. **Handles shutdown** gracefully with Ctrl+C
+
+#### Manual Mode
+
+Alternatively, run services in separate terminals:
+
+**Terminal 1 (Backend):**
+```bash
+source .venv/bin/activate
+uvicorn app.main:app --reload --port 8000
+```
+
+**Terminal 2 (Frontend):**
+```bash
+cd frontend
+npm run dev
+```
+
+### Production Deployment
+
+#### Backend Production Server
+
+For production, use Gunicorn with Uvicorn workers:
+
+```bash
+pip install gunicorn
+gunicorn app.main:app \
+  --workers 4 \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:8000 \
+  --access-logfile - \
+  --error-logfile -
+```
+
+Or use systemd for service management:
+
+```ini /etc/systemd/system/torn-backend.service
+[Unit]
+Description=Torn Backend API
+After=network.target postgresql.service
+
+[Service]
+Type=notify
+User=torn
+Group=torn
+WorkingDirectory=/opt/torn
+Environment="PATH=/opt/torn/.venv/bin"
+ExecStart=/opt/torn/.venv/bin/gunicorn app.main:app \
+  --workers 4 \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:8000
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### Frontend Production Server
+
+Build and serve the Next.js application:
+
+```bash
+cd frontend
+npm run build
+NODE_ENV=production npm start
+```
+
+For better performance, use a reverse proxy (Nginx, Caddy) or deploy to platforms like:
+
+- **Vercel** (optimized for Next.js)
+- **Netlify**
+- **AWS Amplify**
+- **Docker** with custom Nginx configuration
+
+#### Docker Deployment (Optional)
+
+Example `Dockerfile` for the backend:
+
+```dockerfile Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app/ ./app/
+COPY scripts/ ./scripts/
+COPY data/ ./data/
+
+EXPOSE 8000
+
+CMD ["gunicorn", "app.main:app", \
+     "--workers", "4", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--bind", "0.0.0.0:8000"]
+```
+
+## Architecture Overview
+
+Torn follows a modular monorepo structure:
+
+```
+torn/
+├── app/                      # Backend (FastAPI)
+│   ├── models/              # SQLAlchemy ORM models
+│   │   ├── user.py         # Users and customers
+│   │   ├── sale.py         # Sales (header + details)
+│   │   ├── product.py      # Products and inventory
+│   │   ├── cash.py         # Cash sessions
+│   │   └── dte.py          # Tax documents and folios
+│   ├── routers/            # API endpoints (controllers)
+│   │   ├── sales.py        # Sales and returns logic
+│   │   ├── cash.py         # Cash session management
+│   │   └── saas.py         # Multi-tenant management
+│   ├── services/           # Business logic layer
+│   │   └── xml_generator.py # DTE XML generation
+│   ├── utils/              # Utilities
+│   ├── schemas.py          # Pydantic models
+│   ├── database.py         # Database configuration
+│   └── main.py             # Application entrypoint
+├── frontend/               # Frontend (Next.js)
+│   ├── app/               # Next.js app directory
+│   ├── components/        # React components
+│   ├── lib/               # Utilities and API client
+│   └── package.json       # Frontend dependencies
+├── scripts/               # Maintenance scripts
+├── tests/                 # Integration tests (Pytest)
+├── requirements.txt       # Backend dependencies
+├── run.py                # Development launcher
+└── .env                  # Environment configuration
+```
+
+## Verification
+
+After installation, verify everything is working:
+
+### 1. Check Backend Health
+
+```bash
+curl http://localhost:8000/
+```
+
+Expected response:
+```json
+{"message": "Sistema Torn Online"}
+```
+
+### 2. Check API Documentation
+
+FastAPI provides interactive API docs:
+
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+### 3. Check Frontend
+
+Open http://localhost:3000 in your browser. You should see the Torn login/dashboard.
+
+### 4. Check Database Connection
+
+Verify tables were created:
+
+```bash
+psql -U torn -d torn_db -c "\dt"
+```
+
+You should see tables like `users`, `sales`, `products`, `cash_sessions`, etc.
+
+## Troubleshooting
+
+### Backend Issues
+
+<AccordionGroup>
+
+<Accordion title="ModuleNotFoundError: No module named 'app'">
+Ensure you're running the command from the project root (not from `app/` directory) and your virtual environment is activated:
+
+```bash
+source .venv/bin/activate  # Activate venv
+cd /path/to/torn           # Go to project root
+uvicorn app.main:app --reload
+```
+</Accordion>
+
+<Accordion title="Database connection refused">
+Check that PostgreSQL is running and accepting connections:
+
+```bash
+sudo systemctl status postgresql
+psql -U postgres -h localhost -c "SELECT version();"
+```
+
+Verify your `.env` credentials match your PostgreSQL setup.
+</Accordion>
+
+<Accordion title="Port 8000 already in use">
+Find and kill the process using port 8000:
+
+```bash
+lsof -ti:8000 | xargs kill -9
+```
+
+Or use the `run.py` script which handles this automatically.
+</Accordion>
+
+</AccordionGroup>
+
+### Frontend Issues
+
+<AccordionGroup>
+
+<Accordion title="npm install fails with EACCES">
+Fix npm permissions or use a version manager like nvm:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+nvm install 18
+nvm use 18
+```
+</Accordion>
+
+<Accordion title="Module not found: Can't resolve 'axios'">
+Reinstall dependencies:
+
+```bash
+cd frontend
+rm -rf node_modules package-lock.json
+npm install
+```
+</Accordion>
+
+<Accordion title="API calls return CORS errors">
+The backend includes CORS middleware for `localhost:3000`. If using a different port, update `app/main.py`:
+
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:YOUR_PORT",  # Add your port
+    ],
+    ...
+)
+```
+</Accordion>
+
+</AccordionGroup>
+
+## Next Steps
+
+Now that Torn is installed:
+
+<CardGroup cols={2}>
+
+<Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+  Create your first tenant and process a sale
+</Card>
+
+<Card title="Multi-Tenancy" icon="users" href="/concepts/multi-tenancy">
+  Understanding tenant isolation
+</Card>
+
+<Card title="API Reference" icon="code" href="/api/overview">
+  Explore all available endpoints
+</Card>
+
+<Card title="Core Concepts" icon="book" href="/concepts/pos-workflow">
+  Learn the architecture
+</Card>
+
+</CardGroup>

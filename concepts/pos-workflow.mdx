@@ -1,0 +1,501 @@
+---
+title: POS Workflow
+description: Complete sales workflow from cash session management to atomic transaction processing
+icon: cash-register
+---
+
+## Overview
+
+Torn's POS (Point of Sale) engine orchestrates the complete retail workflow with **absolute atomicity**. Every sale is a coordinated transaction that touches inventory, payments, DTE generation, and cash management—all within a single database commit.
+
+<Note>
+  The sales workflow implements "all or nothing" semantics: if any step fails (even XML generation), the entire transaction is rolled back.
+</Note>
+
+## Complete Sales Flow
+
+From the technical report (INFORME_TECNICO.md:36):
+
+> Cuando se procesa una venta, el sistema ejecuta en una sola transacción:
+> 1. **Verificación**: Stock disponible y Caja abierta
+> 2. **Bloqueo**: Reserva de recursos
+> 3. **Ejecución**: Descuento de inventario (FIFO/LIFO), Registro de kardex, Generación de deuda (si crédito), Creación del DTE
+> 4. **Commit**: Si todo es correcto, se persiste. Si falla algo, Rollback total.
+
+<Steps>
+  <Step title="Pre-Flight Checks">
+    Verify cash session is open and customer exists:
+    
+    ```python app/routers/sales.py
+    # Validate Cash Session Open
+    active_session = db.query(CashSession).filter(
+        CashSession.user_id == seller_id_to_use,
+        CashSession.status == "OPEN"
+    ).first()
+    
+    if not active_session:
+        raise HTTPException(
+            status_code=409,
+            detail=f"El vendedor no tiene turno de caja abierto."
+        )
+
+    # Validate Customer
+    customer = db.query(Customer).filter(
+        Customer.rut == sale_in.rut_cliente
+    ).first()
+    if not customer:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Cliente con RUT {sale_in.rut_cliente} no encontrado"
+        )
+    ```
+  </Step>
+  
+  <Step title="Product Validation & Stock Check">
+    Verify each product exists, is active, and has sufficient stock:
+    
+    ```python app/routers/sales.py
+    for item in sale_in.items:
+        product = db.query(Product).filter(
+            Product.id == item.product_id
+        ).first()
+        
+        if not product:
+            raise HTTPException(status_code=404, 
+                              detail=f"Producto {item.product_id} no encontrado")
+        
+        if not product.is_active:
+            raise HTTPException(status_code=400,
+                              detail=f"Producto {product.nombre} no está activo")
+        
+        # Stock validation
+        if product.controla_stock:
+            if product.stock_actual < item.cantidad:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Stock insuficiente para {product.nombre}. "
+                           f"Disponible: {product.stock_actual}, "
+                           f"Solicitado: {item.cantidad}"
+                )
+    ```
+  </Step>
+  
+  <Step title="Inventory Deduction & Kardex">
+    Decrement stock and create immutable movement records:
+    
+    ```python app/routers/sales.py
+    # Deduct Stock and Register Movement
+    product.stock_actual -= item.cantidad
+    
+    from app.models.inventory import StockMovement
+    
+    movement = StockMovement(
+        product_id=product.id,
+        user_id=seller_id_to_use,
+        tipo="SALIDA",
+        motivo="VENTA",
+        cantidad=item.cantidad,
+        description=f"Venta en proceso", 
+    )
+    stock_movements.append(movement)
+    ```
+  </Step>
+  
+  <Step title="Tax Calculation">
+    Calculate line totals, net amount, and 19% IVA:
+    
+    ```python app/routers/sales.py
+    precio_unitario = product.precio_neto
+    cantidad = item.cantidad
+    subtotal_linea = precio_unitario * cantidad
+    total_neto += subtotal_linea
+
+    detail_obj = SaleDetail(
+        product_id=product.id,
+        cantidad=cantidad,
+        precio_unitario=precio_unitario,
+        subtotal=subtotal_linea,
+        descuento=0,
+    )
+    sale_details.append(detail_obj)
+
+    # Calculate IVA and Total
+    iva = total_neto * Decimal("0.19")
+    total = total_neto + iva
+    ```
+  </Step>
+  
+  <Step title="Payment Validation">
+    Ensure payment amounts cover the total:
+    
+    ```python app/routers/sales.py
+    total_payments = sum(p.amount for p in sale_in.payments)
+    
+    if total_payments < total:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Monto de pagos ({total_payments}) inferior al "
+                   f"total de la venta ({total})"
+        )
+    ```
+  </Step>
+  
+  <Step title="Folio Assignment">
+    Retrieve next available folio from CAF:
+    
+    ```python app/routers/sales.py
+    tipo = sale_in.tipo_dte
+    caf = db.query(CAF).filter(
+        CAF.tipo_documento == tipo,
+        CAF.ultimo_folio_usado < CAF.folio_hasta,
+    ).order_by(CAF.id.asc()).first()
+
+    if caf:
+        nuevo_folio = caf.ultimo_folio_usado + 1
+        caf.ultimo_folio_usado = nuevo_folio
+        db.add(caf)
+    else:
+        # Simulation mode: use manual correlative
+        last_sale = db.query(Sale).filter(
+            Sale.tipo_dte == tipo
+        ).order_by(Sale.folio.desc()).first()
+        nuevo_folio = (last_sale.folio + 1) if last_sale else 1
+    ```
+  </Step>
+  
+  <Step title="Create Sale Record">
+    Persist the sale with all details and movements:
+    
+    ```python app/routers/sales.py
+    new_sale = Sale(
+        customer_id=customer.id,
+        folio=nuevo_folio,
+        tipo_dte=tipo,
+        monto_neto=total_neto,
+        iva=iva,
+        monto_total=total,
+        descripcion=sale_in.descripcion,
+        seller_id=seller_id_to_use,
+        user_id=seller_id_to_use,
+        details=sale_details,
+        stock_movements=stock_movements,
+        referencias=referencias_json,
+    )
+    db.add(new_sale)
+    db.flush()  # Generate new_sale.id without committing
+    ```
+  </Step>
+  
+  <Step title="Record Payments">
+    Create payment records for each payment method:
+    
+    ```python app/routers/sales.py
+    for payment_in in sale_in.payments:
+        pm = SalePayment(
+            sale_id=new_sale.id,
+            payment_method_id=payment_in.payment_method_id,
+            amount=payment_in.amount,
+            transaction_code=payment_in.transaction_code,
+        )
+        db.add(pm)
+
+        # Internal Credit Logic
+        pay_method = db.query(PaymentMethod).get(
+            payment_in.payment_method_id
+        )
+        if pay_method and pay_method.code == "CREDITO_INTERNO":
+            customer.current_balance += payment_in.amount
+            db.add(customer)
+    ```
+  </Step>
+  
+  <Step title="Generate DTE XML">
+    Create the electronic invoice XML and persist atomically:
+    
+    ```python app/routers/sales.py
+    try:
+        issuer = db.query(Issuer).first()
+        xml_content = render_factura_xml(new_sale, issuer, customer)
+
+        dte = DTE(
+            sale_id=new_sale.id,
+            tipo_dte=tipo,
+            folio=nuevo_folio,
+            xml_content=xml_content,
+            estado_sii="GENERADO",
+        )
+        db.add(dte)
+        db.commit()  # ATOMIC COMMIT
+    except Exception:
+        db.rollback()  # FULL ROLLBACK
+        raise HTTPException(
+            status_code=500,
+            detail="Error al generar el DTE. Transacción revertida."
+        )
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  If DTE generation fails, the **entire sale is rolled back**, including inventory movements and payment records. This ensures perfect data consistency.
+</Warning>
+
+## Cash Session Management
+
+### The Blind Cash Model
+
+From INFORME_TECNICO.md:48:
+
+> **Ciclo de Caja (Blind Cash)**
+> - **Apertura**: Cajero declara monto inicial.
+> - **Operación**: El sistema acumula "Lo que debería haber" (`final_cash_system`).
+> - **Cierre**: El cajero declara "Lo que tiene" (`final_cash_declared`).
+> - **Resultado**: El backend calcula la diferencia (`difference`) y cierra el turno. El cajero nunca ve el esperado antes de declarar.
+
+### Cash Session Model
+
+```python app/models/cash.py
+class CashSession(Base):
+    """Sesión de Caja (Turno de Cajero).
+
+    Controla el ciclo de vida de una caja registradora.
+    """
+    __tablename__ = "cash_sessions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    start_time = Column(DateTime(timezone=True), server_default=func.now())
+    end_time = Column(DateTime(timezone=True), nullable=True)
+    
+    start_amount = Column(Numeric(15, 2), nullable=False)
+    final_cash_system = Column(Numeric(15, 2), default=0)
+    final_cash_declared = Column(Numeric(15, 2), default=0)
+    difference = Column(Numeric(15, 2), default=0)
+    
+    status = Column(String(20), default="OPEN", index=True)
+    
+    user = relationship("app.models.user.User", backref="cash_sessions")
+```
+
+### Opening a Session
+
+```python app/routers/cash.py
+@router.post("/open", response_model=CashSessionOut)
+def open_session(
+    session_in: CashSessionCreate, 
+    db: Session = Depends(get_tenant_db),
+    local_user: User = Depends(get_current_local_user)
+):
+    """Abre una nueva sesión de caja."""
+    user_id = local_user.id
+
+    # Check for existing open session
+    active_session = db.query(CashSession).filter(
+        CashSession.user_id == user_id,
+        CashSession.status == "OPEN"
+    ).first()
+    
+    if active_session:
+        if session_in.force_close_previous:
+            active_session.status = "CLOSED_SYSTEM"
+            active_session.end_time = datetime.now()
+            db.commit()
+        else:
+            raise HTTPException(
+                status_code=409, 
+                detail=f"Ya existe una caja abierta (ID: {active_session.id})"
+            )
+
+    new_session = CashSession(
+        user_id=user_id,
+        start_amount=session_in.start_amount,
+        status="OPEN"
+    )
+    db.add(new_session)
+    db.commit()
+    return new_session
+```
+
+### Closing a Session (Arqueo)
+
+The cashier declares their final count, and the system calculates the difference:
+
+```python app/routers/cash.py
+@router.post("/close", response_model=CashSessionOut)
+def close_session(
+    close_in: CashSessionClose, 
+    db: Session = Depends(get_tenant_db),
+    local_user: User = Depends(get_current_local_user)
+):
+    """Cierra la sesión de caja y realiza arqueo."""
+    user_id = local_user.id
+    active_session = db.query(CashSession).filter(
+        CashSession.user_id == user_id,
+        CashSession.status == "OPEN"
+    ).first()
+    
+    if not active_session:
+        raise HTTPException(status_code=404, detail="No hay caja abierta")
+
+    # Calculate System Total
+    total_sales_cash = db.query(func.coalesce(func.sum(SalePayment.amount), 0))\
+        .join(Sale)\
+        .join(PaymentMethod)\
+        .filter(
+            Sale.created_at >= active_session.start_time,
+            Sale.seller_id == user_id,
+            PaymentMethod.code == "EFECTIVO"
+        ).scalar()
+    
+    final_system = active_session.start_amount + total_sales_cash
+    
+    active_session.end_time = get_now()
+    active_session.final_cash_system = final_system
+    active_session.final_cash_declared = close_in.final_cash_declared
+    active_session.difference = close_in.final_cash_declared - final_system
+    active_session.status = "CLOSED"
+    
+    db.commit()
+    return active_session
+```
+
+<Info>
+  The "blind cash" method prevents fraud by ensuring the cashier cannot see the expected amount before declaring their count.
+</Info>
+
+## Payment Methods
+
+### Multiple Payment Methods
+
+Torn supports split payments across multiple methods:
+
+```python app/models/payment.py
+class PaymentMethod(Base):
+    """Medio de Pago."""
+    __tablename__ = "payment_methods"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False)
+    name = Column(String(100), nullable=False)
+    is_active = Column(Boolean, default=True)
+```
+
+Common codes:
+- `EFECTIVO` - Cash
+- `TARJETA_DEBITO` - Debit card
+- `TARJETA_CREDITO` - Credit card
+- `TRANSFERENCIA` - Bank transfer
+- `CREDITO_INTERNO` - Internal account credit
+
+### Internal Credit System
+
+From INFORME_TECNICO.md:66:
+
+> **Cuentas Corrientes de Clientes ("Fiado")**:
+> - Ahora cada cliente tiene un `current_balance`.
+> - Nuevo medio de pago `CREDITO_INTERNO`.
+> - Permite gestionar deuda y pagos futuros de forma nativa.
+
+When using internal credit:
+
+```python app/routers/sales.py
+pay_method = db.query(PaymentMethod).get(payment_in.payment_method_id)
+if pay_method and pay_method.code == "CREDITO_INTERNO":
+    customer.current_balance += payment_in.amount
+    db.add(customer)
+```
+
+## Return Processing (Logística Inversa)
+
+From INFORME_TECNICO.md:53:
+
+> **Logística Inversa (Devoluciones)**: Nuevo motor implementado. Permite:
+> - Anular ventas parciales o totales.
+> - Reingresar stock automáticamente con motivo "DEVOLUCION".
+> - Generar Nota de Crédito (DTE 61).
+> - Reversar deuda de cliente (Abono) o entregar efectivo.
+
+### Return Workflow
+
+```python app/routers/sales.py
+@router.post("/return", response_model=SaleOut)
+def create_return(
+    return_in: ReturnCreate, 
+    db: Session = Depends(get_tenant_db)
+):
+    """Registra una Devolución (Nota de Crédito)."""
+    
+    # 1. Find original sale
+    original_sale = db.query(Sale).get(return_in.original_sale_id)
+    if not original_sale:
+        raise HTTPException(status_code=404, 
+                          detail="Venta original no encontrada")
+
+    # 2. Restock inventory
+    for item in return_in.items:
+        product = db.query(Product).get(item.product_id)
+        
+        if product.controla_stock:
+            product.stock_actual += item.cantidad
+            
+            movement = StockMovement(
+                product_id=product.id,
+                user_id=user_id,
+                tipo="ENTRADA",
+                motivo="DEVOLUCION",
+                cantidad=item.cantidad,
+                description=f"Devolución venta f.{original_sale.folio}"
+            )
+            stock_movements.append(movement)
+    
+    # 3. Generate Credit Note (DTE 61)
+    referencias_json = [{
+        "tipo_documento": str(original_sale.tipo_dte),
+        "folio": str(original_sale.folio),
+        "fecha": original_sale.fecha_emision.strftime("%Y-%m-%d"),
+        "sii_reason_code": return_in.sii_reason_code
+    }]
+
+    nc_sale = Sale(
+        customer_id=original_sale.customer_id,
+        folio=nuevo_folio,
+        tipo_dte=61,  # Credit Note
+        referencias=referencias_json,
+        related_sale_id=original_sale.id
+    )
+    
+    # 4. Process refund
+    method = db.query(PaymentMethod).get(return_in.return_method_id)
+    if method.code == "CREDITO_INTERNO":
+        customer.current_balance -= total  # Reduce debt
+    
+    db.commit()
+    return nc_sale
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Always Require Open Cash Session" icon="lock">
+    Never allow sales without an active cash session. This ensures proper financial tracking and audit trails.
+  </Card>
+  
+  <Card title="Validate Stock Before Commit" icon="boxes-stacked">
+    Check stock availability early in the transaction to fail fast and avoid rollbacks deep in the workflow.
+  </Card>
+  
+  <Card title="Use Atomic Transactions" icon="database">
+    Never separate sale creation from DTE generation. Use `flush()` instead of `commit()` for intermediate steps.
+  </Card>
+  
+  <Card title="Track Seller on Sales" icon="user-tag">
+    Always record `seller_id` to enable multi-cashier setups and accurate cash session calculations.
+  </Card>
+</CardGroup>
+
+## Related Concepts
+
+- [Inventory System](/concepts/inventory-system) - Stock movement tracking
+- [Electronic Invoicing](/concepts/electronic-invoicing) - DTE generation details
+- [Customer Management](/api/customers) - Customer credit accounts

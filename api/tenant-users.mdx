@@ -1,0 +1,400 @@
+---
+title: 'Tenant Users'
+description: 'Manage user assignments and access to tenant organizations'
+---
+
+## Overview
+
+Tenant Users represent the relationship between global SaaS users and specific tenant organizations. A single user can be assigned to multiple tenants with different roles in each. This system enables:
+
+- Multi-tenant user access with role-based permissions
+- Plan-based user limits and validation
+- Automatic synchronization between global and tenant-local user databases
+- Role assignment per tenant (Admin, Cashier, Warehouse, etc.)
+
+## User Synchronization
+
+When users are assigned to a tenant, the system automatically:
+1. Creates or updates the user in the global `saas_users` table
+2. Links the user to the tenant in the `tenant_users` table
+3. Synchronizes the user to the tenant's local schema `users` table
+4. Assigns the appropriate role based on the tenant's role configuration
+
+This dual-database approach ensures both centralized authentication and tenant-isolated operations.
+
+---
+
+## Assign User to Tenant
+
+<api>POST /saas/tenants/{tenant_id}/users</api>
+
+Assigns a user to a tenant organization. If the user doesn't exist globally, this endpoint creates a new user account. The endpoint validates plan limits and synchronizes the user to the tenant's local database.
+
+### Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authenticated superuser
+</ParamField>
+
+### Path Parameters
+
+<ParamField path="tenant_id" type="integer" required>
+  The unique identifier of the tenant to assign the user to
+</ParamField>
+
+### Body
+
+<ParamField body="email" type="string" required>
+  User's email address (used for authentication and identification)
+</ParamField>
+
+<ParamField body="password" type="string">
+  Password for new users. Required if the user doesn't exist globally. Ignored for existing users.
+</ParamField>
+
+<ParamField body="full_name" type="string">
+  User's full name
+</ParamField>
+
+<ParamField body="role_name" type="string" required>
+  Role to assign within this tenant (e.g., "ADMINISTRADOR", "CAJERO", "BODEGUERO")
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer">
+  Unique tenant-user assignment identifier
+</ResponseField>
+
+<ResponseField name="tenant_id" type="integer">
+  The tenant ID this assignment belongs to
+</ResponseField>
+
+<ResponseField name="user_id" type="integer">
+  The global user ID
+</ResponseField>
+
+<ResponseField name="role_name" type="string">
+  The role assigned to this user within the tenant
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean">
+  Whether this user assignment is currently active
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  Nested user object containing:
+  - `id` (integer): User's global ID
+  - `email` (string): User's email address
+  - `full_name` (string): User's full name
+  - `is_active` (boolean): Whether the user account is active
+  - `is_superuser` (boolean): Whether the user is a platform superuser
+</ResponseField>
+
+<RequestExample>
+```bash
+curl -X POST https://api.torn.cl/saas/tenants/42/users \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "maria.gonzalez@example.com",
+    "password": "SecureP@ssw0rd!",
+    "full_name": "María González",
+    "role_name": "CAJERO"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json
+{
+  "id": 156,
+  "tenant_id": 42,
+  "user_id": 89,
+  "role_name": "CAJERO",
+  "is_active": true,
+  "user": {
+    "id": 89,
+    "email": "maria.gonzalez@example.com",
+    "full_name": "María González",
+    "is_active": true,
+    "is_superuser": false
+  }
+}
+```
+</ResponseExample>
+
+### Error Responses
+
+<ResponseField name="400 Bad Request - User Limit Exceeded">
+  Returned when the tenant has reached its maximum user limit based on the subscription plan.
+  ```json
+  {
+    "detail": "El plan actual (Max 3) no permite agregar más usuarios a la empresa."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="400 Bad Request - Password Required">
+  Returned when creating a new user without providing a password.
+  ```json
+  {
+    "detail": "Password is required for new core users"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="400 Bad Request - User Already Assigned">
+  Returned when the user is already assigned to this tenant.
+  ```json
+  {
+    "detail": "El usuario ya pertenece a esta empresa"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="403 Forbidden">
+  Returned when the authenticated user is not a superuser.
+  ```json
+  {
+    "detail": "Not authorized"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="404 Not Found">
+  Returned when the specified tenant does not exist.
+  ```json
+  {
+    "detail": "Tenant not found"
+  }
+  ```
+</ResponseField>
+
+---
+
+## List Tenant Users
+
+<api>GET /saas/tenants/{tenant_id}/users</api>
+
+Retrieves all users assigned to a specific tenant, including their roles and status.
+
+### Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authenticated superuser
+</ParamField>
+
+### Path Parameters
+
+<ParamField path="tenant_id" type="integer" required>
+  The unique identifier of the tenant
+</ParamField>
+
+### Response
+
+Returns an array of tenant-user assignment objects with the same structure as the Assign User response.
+
+<RequestExample>
+```bash
+curl -X GET https://api.torn.cl/saas/tenants/42/users \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json
+[
+  {
+    "id": 155,
+    "tenant_id": 42,
+    "user_id": 88,
+    "role_name": "ADMINISTRADOR",
+    "is_active": true,
+    "user": {
+      "id": 88,
+      "email": "admin@lospinos.cl",
+      "full_name": "Juan Pérez",
+      "is_active": true,
+      "is_superuser": false
+    }
+  },
+  {
+    "id": 156,
+    "tenant_id": 42,
+    "user_id": 89,
+    "role_name": "CAJERO",
+    "is_active": true,
+    "user": {
+      "id": 89,
+      "email": "maria.gonzalez@example.com",
+      "full_name": "María González",
+      "is_active": true,
+      "is_superuser": false
+    }
+  },
+  {
+    "id": 157,
+    "tenant_id": 42,
+    "user_id": 90,
+    "role_name": "BODEGUERO",
+    "is_active": false,
+    "user": {
+      "id": 90,
+      "email": "carlos.rodriguez@example.com",
+      "full_name": "Carlos Rodríguez",
+      "is_active": true,
+      "is_superuser": false
+    }
+  }
+]
+```
+</ResponseExample>
+
+### Error Responses
+
+<ResponseField name="403 Forbidden">
+  Returned when the authenticated user is not a superuser.
+  ```json
+  {
+    "detail": "Not authorized"
+  }
+  ```
+</ResponseField>
+
+---
+
+## Update Tenant User
+
+<api>PATCH /saas/tenants/{tenant_id}/users/{user_id}</api>
+
+Updates a user's role, status, password, or name within a tenant. Changes are automatically synchronized to the tenant's local database schema.
+
+### Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authenticated superuser
+</ParamField>
+
+### Path Parameters
+
+<ParamField path="tenant_id" type="integer" required>
+  The unique identifier of the tenant
+</ParamField>
+
+<ParamField path="user_id" type="integer" required>
+  The global user ID to update
+</ParamField>
+
+### Body
+
+All fields are optional. Only include fields you want to update.
+
+<ParamField body="role_name" type="string">
+  Updated role for this user within the tenant
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Whether this user assignment should be active
+</ParamField>
+
+<ParamField body="password" type="string">
+  New password for the user (updates globally, not tenant-specific)
+</ParamField>
+
+<ParamField body="full_name" type="string">
+  Updated full name for the user (updates globally, not tenant-specific)
+</ParamField>
+
+### Response
+
+Returns the updated tenant-user assignment object with the same structure as the Assign User response.
+
+<RequestExample>
+```bash
+curl -X PATCH https://api.torn.cl/saas/tenants/42/users/89 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role_name": "ADMINISTRADOR",
+    "is_active": true
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json
+{
+  "id": 156,
+  "tenant_id": 42,
+  "user_id": 89,
+  "role_name": "ADMINISTRADOR",
+  "is_active": true,
+  "user": {
+    "id": 89,
+    "email": "maria.gonzalez@example.com",
+    "full_name": "María González",
+    "is_active": true,
+    "is_superuser": false
+  }
+}
+```
+</ResponseExample>
+
+### Error Responses
+
+<ResponseField name="403 Forbidden">
+  Returned when the authenticated user is not a superuser.
+  ```json
+  {
+    "detail": "Not authorized"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="404 Not Found">
+  Returned when the tenant-user assignment does not exist.
+  ```json
+  {
+    "detail": "Tenant user link not found"
+  }
+  ```
+</ResponseField>
+
+---
+
+## Plan Limits and Validation
+
+User assignments are subject to plan-based limits:
+
+### Max Users Calculation
+
+The system determines the maximum allowed users using this priority:
+
+1. **Tenant Override**: If `max_users_override` is set on the tenant, use that value
+2. **Plan Limit**: Otherwise, use the plan's `max_users` value
+3. **Default**: If no plan is assigned, default to 1 user
+
+### Validation Rules
+
+- Only **active** tenant users count toward the limit
+- Deactivated users (`is_active = false`) do not count
+- The limit is checked before creating new user assignments
+- Superusers can set custom limits via `max_users_override`
+
+### Example Scenarios
+
+**Scenario 1: Plan Limit**
+- Tenant has plan with `max_users = 3`
+- No override set
+- Can assign up to 3 active users
+
+**Scenario 2: Custom Override**
+- Tenant has plan with `max_users = 3`
+- `max_users_override = 10` is set
+- Can assign up to 10 active users
+
+**Scenario 3: Deactivated Users**
+- Limit is 3 users
+- 3 active users + 2 deactivated users = 3 counted
+- Can still assign more users (deactivated don't count)

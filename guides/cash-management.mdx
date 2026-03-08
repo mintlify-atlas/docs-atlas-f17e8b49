@@ -1,0 +1,516 @@
+---
+title: "Cash Management"
+description: "Complete guide to managing cash sessions, performing blind cash counts, and tracking cashier accountability"
+---
+
+## Overview
+
+Torn implements a **blind cash count** system where cashiers declare their cash totals without seeing the expected amount. This prevents bias and ensures accurate accountability.
+
+## Cash Session Lifecycle
+
+```
+OPEN → [Process Sales] → CLOSED
+  ↓                          ↓
+start_amount            blind count
+  ↓                          ↓
+final_cash_system ← → final_cash_declared
+                    ↓
+              difference (variance)
+```
+
+Source: `/app/models/cash.py:9-49`
+
+## Opening a Cash Session
+
+<Steps>
+
+<Step title="Authenticate as Cashier">
+Obtain a JWT token for the cashier user:
+
+```bash
+curl -X POST https://api.torn.cl/auth/login \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: 5" \
+  -d '{
+    "rut": "12345678-9",
+    "password": "cashier-password"
+  }'
+```
+
+**Response:**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "user": {
+    "id": 8,
+    "full_name": "Juan Pérez",
+    "role": "VENDEDOR"
+  }
+}
+```
+</Step>
+
+<Step title="Open Cash Register">
+Declare the starting cash amount (fondo de caja):
+
+```bash
+curl -X POST https://api.torn.cl/cash/open \
+  -H "Authorization: Bearer CASHIER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start_amount": 50000
+  }'
+```
+
+**Response:**
+```json
+{
+  "id": 234,
+  "user_id": 8,
+  "start_time": "2026-03-08T08:00:00Z",
+  "start_amount": 50000.00,
+  "status": "OPEN",
+  "final_cash_system": 0,
+  "final_cash_declared": 0,
+  "difference": 0
+}
+```
+</Step>
+
+<Step title="Handle Previous Session">
+If a previous session wasn't closed properly, use force close:
+
+```bash
+curl -X POST https://api.torn.cl/cash/open \
+  -H "Authorization: Bearer CASHIER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start_amount": 50000,
+    "force_close_previous": true
+  }'
+```
+
+This automatically closes the previous session with status `CLOSED_SYSTEM`.
+</Step>
+
+</Steps>
+
+Source: `/app/routers/cash.py:24-85`
+
+<Warning>
+Only one cash session can be open per user at a time. Attempting to open a second session without closing the first will return a `409 Conflict` error.
+</Warning>
+
+## Processing Sales During Session
+
+Once the cash session is open, the cashier can process sales:
+
+```bash
+curl -X POST https://api.torn.cl/sales/ \
+  -H "Authorization: Bearer CASHIER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rut_cliente": "12345678-9",
+    "tipo_dte": 39,
+    "items": [{"product_id": 15, "cantidad": 2}],
+    "payments": [{"payment_method_id": 1, "amount": 20000}]
+  }'
+```
+
+The system validates that:
+1. The cashier (`local_user`) has an active `OPEN` cash session
+2. Throws `409 Conflict` if no session is open
+
+Source: `/app/routers/sales.py:106-117`
+
+<Note>
+All sales are automatically linked to the cashier via `seller_id`, enabling accurate cash count calculations at session close.
+</Note>
+
+## Checking Session Status
+
+Query the current session state:
+
+```bash
+curl -X GET https://api.torn.cl/cash/status \
+  -H "Authorization: Bearer CASHIER_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "id": 234,
+  "user_id": 8,
+  "start_time": "2026-03-08T08:00:00Z",
+  "start_amount": 50000.00,
+  "status": "OPEN",
+  "final_cash_system": 0,
+  "final_cash_declared": 0,
+  "difference": 0
+}
+```
+
+If no session is open:
+```json
+{
+  "detail": "No hay caja abierta"
+}
+```
+**Status:** `404 Not Found`
+
+Source: `/app/routers/cash.py:88-137`
+
+## Closing a Cash Session (Blind Count)
+
+<Steps>
+
+<Step title="Cashier Counts Physical Cash">
+The cashier physically counts all cash in the drawer **without** looking at the system total.
+</Step>
+
+<Step title="Declare Final Amount">
+Submit the counted amount:
+
+```bash
+curl -X POST https://api.torn.cl/cash/close \
+  -H "Authorization: Bearer CASHIER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "final_cash_declared": 142500
+  }'
+```
+</Step>
+
+<Step title="System Calculates Difference">
+The backend:
+
+1. Queries all CASH payments for sales by this cashier since `start_time`
+2. Calculates expected cash: `start_amount + total_sales_cash`
+3. Compares with declared amount
+4. Stores the variance
+
+**Response:**
+```json
+{
+  "id": 234,
+  "user_id": 8,
+  "start_time": "2026-03-08T08:00:00Z",
+  "end_time": "2026-03-08T18:00:00Z",
+  "start_amount": 50000.00,
+  "final_cash_system": 143000.00,
+  "final_cash_declared": 142500.00,
+  "difference": -500.00,
+  "status": "CLOSED"
+}
+```
+
+**Interpretation:**
+- `final_cash_system`: What the system expects (50,000 + 93,000 in sales)
+- `final_cash_declared`: What the cashier counted (142,500)
+- `difference`: -500 means 500 pesos **short** (faltante)
+</Step>
+
+</Steps>
+
+Source: `/app/routers/cash.py:140-199`
+
+## Understanding Cash Calculations
+
+### Final Cash System (Expected)
+
+```python
+# Query all EFECTIVO payments linked to this cashier's sales
+total_sales_cash = db.query(func.sum(SalePayment.amount))
+    .join(Sale)
+    .join(PaymentMethod)
+    .filter(
+        Sale.created_at >= active_session.start_time,
+        Sale.seller_id == user_id,
+        PaymentMethod.code == "EFECTIVO"
+    ).scalar()
+
+final_system = active_session.start_amount + total_sales_cash
+```
+
+Source: `/app/routers/cash.py:175-187`
+
+### Difference Calculation
+
+```python
+difference = final_cash_declared - final_cash_system
+```
+
+**Scenarios:**
+- `difference > 0`: Overage (sobrante) - more cash than expected
+- `difference < 0`: Shortage (faltante) - less cash than expected
+- `difference = 0`: Perfect balance
+
+<Tip>
+Small differences (± 100-500 pesos) are common due to rounding or human error. Establish tolerance thresholds in your accountability policy.
+</Tip>
+
+## Viewing Session History
+
+List all cash sessions with user details:
+
+```bash
+curl -X GET https://api.torn.cl/cash/sessions \
+  -H "Authorization: Bearer MANAGER_TOKEN"
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 234,
+    "user_id": 8,
+    "start_time": "2026-03-08T08:00:00Z",
+    "end_time": "2026-03-08T18:00:00Z",
+    "start_amount": 50000.00,
+    "final_cash_system": 143000.00,
+    "final_cash_declared": 142500.00,
+    "difference": -500.00,
+    "status": "CLOSED",
+    "user": {
+      "id": 8,
+      "full_name": "Juan Pérez",
+      "email": "juan@store.cl",
+      "role": "VENDEDOR"
+    }
+  },
+  {
+    "id": 233,
+    "user_id": 7,
+    "start_time": "2026-03-07T08:00:00Z",
+    "end_time": "2026-03-07T18:00:00Z",
+    "start_amount": 50000.00,
+    "final_cash_system": 178000.00,
+    "final_cash_declared": 178200.00,
+    "difference": 200.00,
+    "status": "CLOSED",
+    "user": {
+      "id": 7,
+      "full_name": "María González",
+      "email": "maria@store.cl",
+      "role": "VENDEDOR"
+    }
+  }
+]
+```
+
+Sessions are ordered by `start_time DESC` (newest first).
+
+Source: `/app/routers/cash.py:202-213`
+
+## Session Status Values
+
+| Status | Description |
+|--------|-------------|
+| `OPEN` | Session active, cashier can process sales |
+| `CLOSED` | Session closed normally via blind count |
+| `CLOSED_SYSTEM` | Session force-closed by system (e.g., when opening new session) |
+
+Source: `/app/models/cash.py:42`
+
+## Audit Metadata for System Users
+
+When SaaS admins use system users to operate cash sessions, audit trails are preserved:
+
+```python
+if local_user.is_system_user:
+    active_session.audit_metadata = {
+        "saas_admin_email": global_user.email,
+        "closed_by": "system_user"
+    }
+```
+
+This ensures full traceability of support operations.
+
+Source: `/app/routers/cash.py:80, 194-195`
+
+## Multi-Cashier Environments
+
+### Concurrent Sessions
+
+Each cashier can have their own independent session:
+
+- **Cashier A**: Opens session at 08:00, closes at 14:00
+- **Cashier B**: Opens session at 14:00, closes at 20:00
+- **Cashier C**: Opens session at 10:00, closes at 18:00 (overlapping shifts)
+
+Sales are isolated by `seller_id`, so cash counts remain accurate.
+
+### Shared Cash Drawer Considerations
+
+<Warning>
+If multiple cashiers share a single physical cash drawer, Torn's per-user session model won't work correctly. Options:
+
+1. **Recommended**: Assign one cash drawer per cashier
+2. **Alternative**: Use a shared "station" user account (loses individual accountability)
+3. **Custom**: Extend the model to support shared sessions with cash-in/cash-out events
+</Warning>
+
+## Handling Common Scenarios
+
+### Forgotten Open Session
+
+**Scenario:** Cashier forgets to close session at end of shift.
+
+**Solution:**
+
+```bash
+# Next day, force close when opening new session
+curl -X POST https://api.torn.cl/cash/open \
+  -H "Authorization: Bearer CASHIER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start_amount": 50000,
+    "force_close_previous": true
+  }'
+```
+
+The previous session closes with `status = "CLOSED_SYSTEM"` and `difference = 0` (no declared amount).
+
+### Mid-Day Cash Pickup
+
+**Scenario:** Manager removes excess cash during shift for security.
+
+**Current Limitation:** Torn doesn't have a native "cash pickup" event.
+
+**Workaround:**
+
+1. Close current session (blind count including removed cash)
+2. Immediately open new session with adjusted start amount
+
+**Better Solution (requires implementation):**
+
+Add a `cash_pickups` table:
+
+```python
+class CashPickup:
+    session_id: int
+    amount: Decimal
+    timestamp: datetime
+    authorized_by: int
+```
+
+Then adjust final calculation:
+
+```python
+final_system = start_amount + total_sales_cash - total_pickups
+```
+
+### Split Payments (Mixed Methods)
+
+**Scenario:** Sale paid with 50% cash, 50% card.
+
+The system only counts `EFECTIVO` payments toward `final_cash_system`. Card payments don't affect cash count.
+
+```python
+PaymentMethod.code == "EFECTIVO"  # Only this counted
+```
+
+Source: `/app/routers/cash.py:181`
+
+## Reporting and Analytics
+
+### Cashier Performance Report
+
+```sql
+SELECT 
+  u.full_name,
+  COUNT(*) AS sessions_count,
+  AVG(cs.difference) AS avg_difference,
+  SUM(CASE WHEN cs.difference = 0 THEN 1 ELSE 0 END) AS perfect_counts,
+  SUM(CASE WHEN cs.difference < 0 THEN 1 ELSE 0 END) AS shortages,
+  SUM(CASE WHEN cs.difference > 0 THEN 1 ELSE 0 END) AS overages
+FROM cash_sessions cs
+JOIN users u ON u.id = cs.user_id
+WHERE cs.status = 'CLOSED'
+  AND cs.end_time >= NOW() - INTERVAL '90 days'
+GROUP BY u.id
+ORDER BY avg_difference ASC;
+```
+
+### Daily Cash Summary
+
+```sql
+SELECT 
+  DATE(cs.start_time) AS fecha,
+  COUNT(*) AS sesiones,
+  SUM(cs.start_amount) AS fondos_iniciales,
+  SUM(cs.final_cash_system) AS esperado_total,
+  SUM(cs.final_cash_declared) AS declarado_total,
+  SUM(cs.difference) AS diferencia_total
+FROM cash_sessions cs
+WHERE cs.status = 'CLOSED'
+  AND cs.start_time >= NOW() - INTERVAL '30 days'
+GROUP BY DATE(cs.start_time)
+ORDER BY fecha DESC;
+```
+
+## Best Practices
+
+<Card title="Blind Count Policy" icon="eye-slash">
+Enforce strict blind counts: cashiers should **never** see the expected amount before declaring their total. This is the core of accountability.
+</Card>
+
+<Card title="Variance Thresholds" icon="scale-balanced">
+Establish acceptable variance limits:
+- **± 500**: Acceptable (rounding/human error)
+- **± 1000-5000**: Warning (requires explanation)
+- **> 5000**: Critical (investigation required)
+</Card>
+
+<Card title="Daily Reconciliation" icon="calendar-day">
+Managers should review all session differences daily. Investigate patterns of consistent shortages.
+</Card>
+
+<Card title="Starting Float Consistency" icon="coins">
+Maintain consistent `start_amount` values (e.g., always 50,000) to simplify cashier processes and reduce errors.
+</Card>
+
+<Card title="End-of-Day Security" icon="vault">
+After closing sessions, physically secure all cash:
+1. Count and bag declared amounts
+2. Store in safe
+3. Prepare bank deposits
+4. Document deposit amounts
+</Card>
+
+## Integration with Other Modules
+
+### Sales Module
+
+Sales automatically validate open cash sessions:
+
+```python
+active_session = db.query(CashSession).filter(
+    CashSession.user_id == seller_id,
+    CashSession.status == "OPEN"
+).first()
+
+if not active_session:
+    raise HTTPException(status_code=409, detail="No hay caja abierta")
+```
+
+Source: `/app/routers/sales.py:108-117`
+
+### Returns Module
+
+Cash returns should ideally require an open session, though current implementation may not enforce this. Consider adding validation.
+
+### User Roles
+
+Access control:
+- **Cashiers (VENDEDOR)**: Can open/close their own sessions
+- **Managers (ADMINISTRADOR)**: Can view all sessions, force close sessions
+- **Auditors**: Read-only access to session history
+
+## Related Guides
+
+- [Sales Process](/guides/sales-process) - How sales interact with cash sessions
+- [User Roles](/guides/user-roles) - Configuring permissions
+- [Returns & Refunds](/guides/returns-refunds) - Handling cash refunds

@@ -1,0 +1,348 @@
+---
+title: "Authentication"
+description: "JWT-based authentication system with multi-tenant support"
+---
+
+## Overview
+
+Torn uses JWT (JSON Web Token) authentication with a multi-tenant architecture. Users authenticate at the global SaaS level and then access specific tenants (companies) based on their permissions.
+
+## Authentication Flow
+
+<Steps>
+  <Step title="User Login">
+    Send credentials to obtain a JWT access token and list of available tenants.
+  </Step>
+  
+  <Step title="Token Storage">
+    Store the access token securely (e.g., in memory, secure storage).
+  </Step>
+  
+  <Step title="Tenant Selection">
+    Choose a tenant from the available tenants list.
+  </Step>
+  
+  <Step title="API Requests">
+    Include the token in the Authorization header and tenant ID in the X-Tenant-Id header.
+  </Step>
+</Steps>
+
+## Login Endpoints
+
+### OAuth2 Token Login
+
+OAuth2-compatible endpoint using form data.
+
+```http
+POST /auth/token
+Content-Type: application/x-www-form-urlencoded
+
+username=user@example.com&password=secretpassword
+```
+
+**Response:**
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "user": {
+    "id": 1,
+    "email": "user@example.com",
+    "full_name": "John Doe",
+    "is_active": true,
+    "is_superuser": false
+  },
+  "available_tenants": [
+    {
+      "id": 1,
+      "name": "ACME Corp",
+      "rut": "76123456-7",
+      "role_name": "ADMINISTRADOR",
+      "is_active": true,
+      "max_users": 10,
+      "permissions": {
+        "sales": true,
+        "inventory": true,
+        "reports": true
+      }
+    }
+  ]
+}
+```
+
+### JSON Login
+
+Alternative endpoint accepting JSON body.
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "secretpassword"
+}
+```
+
+<Note>
+  Both endpoints return the same response structure. Use `/auth/login` for modern JSON-based clients.
+</Note>
+
+## Token Configuration
+
+Tokens are configured with the following parameters:
+
+<ParamField path="SECRET_KEY" type="string" required>
+  JWT signing key (configured via environment variable)
+</ParamField>
+
+<ParamField path="ALGORITHM" type="string" default="HS256">
+  JWT signing algorithm
+</ParamField>
+
+<ParamField path="ACCESS_TOKEN_EXPIRE_MINUTES" type="integer" default="720">
+  Token expiration time in minutes (12 hours)
+</ParamField>
+
+Token structure from `app/utils/security.py:23`:
+
+```python
+to_encode = {"exp": expire, "sub": str(subject)}
+encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+```
+
+## Making Authenticated Requests
+
+### Global Endpoints
+
+For global endpoints (like `/auth/users/me`), only the Authorization header is required:
+
+```http
+GET /auth/users/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+### Tenant-Scoped Endpoints
+
+For tenant-specific endpoints, include both headers:
+
+```http
+GET /customers
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+X-Tenant-Id: 1
+```
+
+<Warning>
+  All tenant-scoped endpoints require the `X-Tenant-Id` header. Missing this header will result in a 422 validation error.
+</Warning>
+
+## Tenant-Aware Authentication
+
+### Access Validation
+
+The system validates tenant access through the `get_current_tenant_user` dependency in `app/dependencies/tenant.py:59`:
+
+```python
+async def get_current_tenant_user(
+    x_tenant_id: Annotated[int, Header(description="ID del Tenant a consultar")],
+    current_user: Annotated[SaaSUser, Depends(get_current_global_user)],
+    global_db: Session = Depends(get_global_db)
+) -> TenantUser:
+    """Valida y retorna la membresía (TenantUser) del usuario global en el Inquilino solicitado."""
+    tenant_user = global_db.query(TenantUser).filter(
+        TenantUser.user_id == current_user.id,
+        TenantUser.tenant_id == x_tenant_id,
+        TenantUser.is_active == True
+    ).first()
+
+    if not tenant_user and not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes acceso a este Inquilino / Empresa."
+        )
+```
+
+### Database Schema Isolation
+
+Each tenant has its own PostgreSQL schema for complete data isolation. The `get_tenant_db` dependency automatically routes queries to the correct schema based on the `X-Tenant-Id` header.
+
+## Session Validation
+
+Validate the current session and refresh tenant list:
+
+```http
+GET /auth/validate
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Response:**
+
+```json
+{
+  "user": {
+    "id": 1,
+    "email": "user@example.com",
+    "full_name": "John Doe",
+    "is_active": true,
+    "is_superuser": false
+  },
+  "available_tenants": [
+    {
+      "id": 1,
+      "name": "ACME Corp",
+      "rut": "76123456-7",
+      "role_name": "ADMINISTRADOR",
+      "is_active": true,
+      "max_users": 10,
+      "permissions": {...}
+    }
+  ]
+}
+```
+
+## User Profile
+
+Retrieve the current user's profile:
+
+```http
+GET /auth/users/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+## Error Responses
+
+### 401 Unauthorized
+
+Invalid credentials or expired token:
+
+```json
+{
+  "detail": "Incorrect email or password"
+}
+```
+
+### 403 Forbidden
+
+User doesn't have access to the requested tenant:
+
+```json
+{
+  "detail": "No tienes acceso a este Inquilino / Empresa."
+}
+```
+
+### 404 Not Found
+
+Tenant not found or inactive:
+
+```json
+{
+  "detail": "Inquilino no encontrado o inactivo."
+}
+```
+
+## Security Best Practices
+
+<Steps>
+  <Step title="Use HTTPS">
+    Always use HTTPS in production to protect tokens in transit.
+  </Step>
+  
+  <Step title="Secure Token Storage">
+    Store tokens securely. Avoid localStorage in web applications; prefer memory or secure HTTP-only cookies.
+  </Step>
+  
+  <Step title="Handle Token Expiration">
+    Implement token refresh logic or prompt users to re-authenticate after 12 hours.
+  </Step>
+  
+  <Step title="Validate Tenant Access">
+    Always verify that users have access to the tenant before displaying sensitive data.
+  </Step>
+</Steps>
+
+## Example: Complete Authentication Flow
+
+<CodeGroup>
+
+```python Python
+import requests
+
+# 1. Login
+response = requests.post(
+    "https://api.torn.cl/auth/login",
+    json={
+        "email": "user@example.com",
+        "password": "secretpassword"
+    }
+)
+data = response.json()
+access_token = data["access_token"]
+available_tenants = data["available_tenants"]
+
+# 2. Select tenant
+tenant_id = available_tenants[0]["id"]
+
+# 3. Make authenticated request
+headers = {
+    "Authorization": f"Bearer {access_token}",
+    "X-Tenant-Id": str(tenant_id)
+}
+
+response = requests.get(
+    "https://api.torn.cl/customers",
+    headers=headers
+)
+customers = response.json()
+```
+
+```javascript JavaScript
+// 1. Login
+const loginResponse = await fetch('https://api.torn.cl/auth/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    email: 'user@example.com',
+    password: 'secretpassword'
+  })
+});
+
+const { access_token, available_tenants } = await loginResponse.json();
+
+// 2. Select tenant
+const tenantId = available_tenants[0].id;
+
+// 3. Make authenticated request
+const customersResponse = await fetch('https://api.torn.cl/customers', {
+  headers: {
+    'Authorization': `Bearer ${access_token}`,
+    'X-Tenant-Id': tenantId.toString()
+  }
+});
+
+const customers = await customersResponse.json();
+```
+
+```curl cURL
+# 1. Login
+curl -X POST https://api.torn.cl/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "secretpassword"
+  }'
+
+# Response:
+# {
+#   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+#   "available_tenants": [{"id": 1, ...}]
+# }
+
+# 2. Make authenticated request
+curl https://api.torn.cl/customers \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "X-Tenant-Id: 1"
+```
+
+</CodeGroup>

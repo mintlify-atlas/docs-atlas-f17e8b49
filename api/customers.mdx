@@ -1,0 +1,414 @@
+---
+title: 'Customers'
+description: 'Manage customer records and credit accounts'
+---
+
+## Overview
+
+The Customers API allows you to manage customer (contribuyente) records, including their contact information, tax identification (RUT), and credit account balances. Customers are entities to whom you sell products and services.
+
+## Create Customer
+
+<api method="POST" url="/customers/">
+  Create a new customer record.
+</api>
+
+### Request Body
+
+<ParamField body="rut" type="string" required>
+  Tax identification number (RUT) in format '12345678-9'. Must be unique and valid.
+</ParamField>
+
+<ParamField body="razon_social" type="string" required>
+  Legal or business name of the customer.
+</ParamField>
+
+<ParamField body="giro" type="string">
+  Business activity or industry.
+</ParamField>
+
+<ParamField body="direccion" type="string">
+  Physical address.
+</ParamField>
+
+<ParamField body="comuna" type="string">
+  Municipality or district.
+</ParamField>
+
+<ParamField body="ciudad" type="string">
+  City.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Contact email address.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer">
+  Unique customer identifier.
+</ResponseField>
+
+<ResponseField name="rut" type="string">
+  Tax identification number.
+</ResponseField>
+
+<ResponseField name="razon_social" type="string">
+  Legal or business name.
+</ResponseField>
+
+<ResponseField name="giro" type="string">
+  Business activity.
+</ResponseField>
+
+<ResponseField name="direccion" type="string">
+  Physical address.
+</ResponseField>
+
+<ResponseField name="comuna" type="string">
+  Municipality.
+</ResponseField>
+
+<ResponseField name="ciudad" type="string">
+  City.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Contact email.
+</ResponseField>
+
+<ResponseField name="current_balance" type="decimal">
+  Current credit account balance. Positive values indicate customer owes money, negative values indicate credit in favor of customer.
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean">
+  Whether the customer is active.
+</ResponseField>
+
+<ResponseField name="created_at" type="datetime">
+  Timestamp when the customer was created.
+</ResponseField>
+
+<ResponseField name="updated_at" type="datetime">
+  Timestamp of last update.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST https://api.example.com/customers/ \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "rut": "12345678-9",
+    "razon_social": "Comercial Los Andes Ltda.",
+    "giro": "Venta al por menor",
+    "direccion": "Av. Libertador 1234",
+    "comuna": "Providencia",
+    "ciudad": "Santiago",
+    "email": "contacto@losandes.cl"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 201 Created
+{
+  "id": 1,
+  "rut": "12345678-9",
+  "razon_social": "Comercial Los Andes Ltda.",
+  "giro": "Venta al por menor",
+  "direccion": "Av. Libertador 1234",
+  "comuna": "Providencia",
+  "ciudad": "Santiago",
+  "email": "contacto@losandes.cl",
+  "current_balance": 0.00,
+  "is_active": true,
+  "created_at": "2026-03-08T10:30:00Z",
+  "updated_at": null
+}
+```
+
+```json 409 Conflict
+{
+  "detail": "Ya existe un cliente con RUT 12345678-9"
+}
+```
+</ResponseExample>
+
+## List Customers
+
+<api method="GET" url="/customers/">
+  Retrieve all registered customers, ordered alphabetically by business name.
+</api>
+
+### Response
+
+Returns an array of customer objects.
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/customers/ \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+[
+  {
+    "id": 1,
+    "rut": "12345678-9",
+    "razon_social": "Comercial Los Andes Ltda.",
+    "giro": "Venta al por menor",
+    "direccion": "Av. Libertador 1234",
+    "comuna": "Providencia",
+    "ciudad": "Santiago",
+    "email": "contacto@losandes.cl",
+    "current_balance": 150000.00,
+    "is_active": true,
+    "created_at": "2026-03-08T10:30:00Z",
+    "updated_at": null
+  },
+  {
+    "id": 2,
+    "rut": "98765432-1",
+    "razon_social": "Distribuidora Sur SpA",
+    "giro": "Distribución mayorista",
+    "direccion": "Calle Principal 567",
+    "comuna": "Las Condes",
+    "ciudad": "Santiago",
+    "email": "info@distrisur.cl",
+    "current_balance": -50000.00,
+    "is_active": true,
+    "created_at": "2026-03-07T14:20:00Z",
+    "updated_at": "2026-03-08T09:15:00Z"
+  }
+]
+```
+</ResponseExample>
+
+## Search Customers
+
+<api method="GET" url="/customers/search">
+  Search for customers by RUT or business name (partial match).
+</api>
+
+### Query Parameters
+
+<ParamField query="q" type="string">
+  Search query. Matches against RUT (with or without dots/dashes) or business name. Returns up to 10 results.
+</ParamField>
+
+### Response
+
+Returns an array of matching customer objects (maximum 10).
+
+<RequestExample>
+```bash cURL
+curl -X GET "https://api.example.com/customers/search?q=Los%20Andes" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+[
+  {
+    "id": 1,
+    "rut": "12345678-9",
+    "razon_social": "Comercial Los Andes Ltda.",
+    "giro": "Venta al por menor",
+    "direccion": "Av. Libertador 1234",
+    "comuna": "Providencia",
+    "ciudad": "Santiago",
+    "email": "contacto@losandes.cl",
+    "current_balance": 150000.00,
+    "is_active": true,
+    "created_at": "2026-03-08T10:30:00Z",
+    "updated_at": null
+  }
+]
+```
+</ResponseExample>
+
+## Get Customer by RUT
+
+<api method="GET" url="/customers/{rut}">
+  Retrieve a specific customer by their RUT.
+</api>
+
+### Path Parameters
+
+<ParamField path="rut" type="string" required>
+  Customer's RUT in format '12345678-9'.
+</ParamField>
+
+### Response
+
+Returns a single customer object.
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/customers/12345678-9 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 1,
+  "rut": "12345678-9",
+  "razon_social": "Comercial Los Andes Ltda.",
+  "giro": "Venta al por menor",
+  "direccion": "Av. Libertador 1234",
+  "comuna": "Providencia",
+  "ciudad": "Santiago",
+  "email": "contacto@losandes.cl",
+  "current_balance": 150000.00,
+  "is_active": true,
+  "created_at": "2026-03-08T10:30:00Z",
+  "updated_at": null
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "No se encontró un cliente con RUT 12345678-9"
+}
+```
+</ResponseExample>
+
+## Update Customer
+
+<api method="PUT" url="/customers/{rut}">
+  Update an existing customer's information.
+</api>
+
+### Path Parameters
+
+<ParamField path="rut" type="string" required>
+  Customer's RUT in format '12345678-9'.
+</ParamField>
+
+### Request Body
+
+All fields are optional. Only provided fields will be updated.
+
+<ParamField body="rut" type="string">
+  New RUT value (must be unique and valid).
+</ParamField>
+
+<ParamField body="razon_social" type="string">
+  Legal or business name.
+</ParamField>
+
+<ParamField body="giro" type="string">
+  Business activity.
+</ParamField>
+
+<ParamField body="direccion" type="string">
+  Physical address.
+</ParamField>
+
+<ParamField body="comuna" type="string">
+  Municipality.
+</ParamField>
+
+<ParamField body="ciudad" type="string">
+  City.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Contact email.
+</ParamField>
+
+### Response
+
+Returns the updated customer object.
+
+<RequestExample>
+```bash cURL
+curl -X PUT https://api.example.com/customers/12345678-9 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "email": "nuevoemail@losandes.cl",
+    "telefono": "+56 2 2345 6789"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 1,
+  "rut": "12345678-9",
+  "razon_social": "Comercial Los Andes Ltda.",
+  "giro": "Venta al por menor",
+  "direccion": "Av. Libertador 1234",
+  "comuna": "Providencia",
+  "ciudad": "Santiago",
+  "email": "nuevoemail@losandes.cl",
+  "current_balance": 150000.00,
+  "is_active": true,
+  "created_at": "2026-03-08T10:30:00Z",
+  "updated_at": "2026-03-08T11:45:00Z"
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "Cliente con RUT 12345678-9 no encontrado"
+}
+```
+</ResponseExample>
+
+## Delete Customer
+
+<api method="DELETE" url="/customers/{rut}">
+  Permanently delete a customer record.
+</api>
+
+### Path Parameters
+
+<ParamField path="rut" type="string" required>
+  Customer's RUT in format '12345678-9'.
+</ParamField>
+
+### Response
+
+Returns no content on success.
+
+<RequestExample>
+```bash cURL
+curl -X DELETE https://api.example.com/customers/12345678-9 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 204 No Content
+```
+
+```json 404 Not Found
+{
+  "detail": "Cliente con RUT 12345678-9 no encontrado"
+}
+```
+</ResponseExample>
+
+## Credit Account Management
+
+The `current_balance` field tracks the customer's credit account:
+
+- **Positive values**: Customer owes money to your business
+- **Negative values**: Customer has credit in their favor
+- **Zero**: Account is settled
+
+This balance is automatically updated when:
+- Sales are made on credit (increases balance)
+- Payments are received (decreases balance)
+- Credit notes are issued (decreases balance)
+
+You can query customers with outstanding balances for accounts receivable management.

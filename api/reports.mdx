@@ -1,0 +1,288 @@
+---
+title: "Reports"
+description: "Generate sales reports and dashboard analytics"
+---
+
+## Overview
+
+The Reports API provides comprehensive business intelligence and analytics for your sales data. Access daily metrics, payment method distribution, top products, and hourly sales patterns.
+
+---
+
+## Get Dashboard Report
+
+<api-endpoint method="GET" path="/reports/dashboard" />
+
+Retrieves comprehensive dashboard metrics for a specific date, including KPIs, hourly sales breakdown, top products, payment method distribution, and active cash session information.
+
+<Note>
+  This endpoint requires admin privileges.
+</Note>
+
+### Query Parameters
+
+<ParamField query="fecha" type="date" default="today">
+  Target date for the report in `YYYY-MM-DD` format. Defaults to today's date if not specified.
+  
+  Example: `2024-03-15`
+</ParamField>
+
+### Response
+
+<ResponseField name="fecha" type="date">
+  The date for which the report was generated
+</ResponseField>
+
+<ResponseField name="kpis" type="object">
+  Key performance indicators for the day:
+  
+  <ResponseField name="total_ventas" type="number">
+    Total sales amount (gross) including all taxes
+  </ResponseField>
+  
+  <ResponseField name="total_neto" type="number">
+    Total net sales amount (before taxes)
+  </ResponseField>
+  
+  <ResponseField name="total_iva" type="number">
+    Total IVA (tax) amount collected
+  </ResponseField>
+  
+  <ResponseField name="num_ventas" type="integer">
+    Number of sales transactions (invoices and receipts only)
+  </ResponseField>
+  
+  <ResponseField name="ticket_promedio" type="number">
+    Average ticket size (total_ventas / num_ventas)
+  </ResponseField>
+  
+  <ResponseField name="num_notas_credito" type="integer">
+    Number of credit notes issued
+  </ResponseField>
+  
+  <ResponseField name="total_notas_credito" type="number">
+    Total amount of credit notes issued
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="ventas_por_hora" type="array">
+  Hourly breakdown of sales activity:
+  
+  <ResponseField name="hora" type="string">
+    Hour of the day in `HH:00` format (e.g., `09:00`, `14:00`)
+  </ResponseField>
+  
+  <ResponseField name="cantidad" type="integer">
+    Number of sales transactions in that hour
+  </ResponseField>
+  
+  <ResponseField name="total" type="number">
+    Total sales amount for that hour
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="top_productos" type="array">
+  Top 5 best-selling products by revenue:
+  
+  <ResponseField name="nombre" type="string">
+    Product name
+  </ResponseField>
+  
+  <ResponseField name="sku" type="string">
+    Product internal code/SKU
+  </ResponseField>
+  
+  <ResponseField name="cantidad" type="number">
+    Total quantity sold
+  </ResponseField>
+  
+  <ResponseField name="total" type="number">
+    Total revenue from this product
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="medios_pago" type="array">
+  Payment method distribution:
+  
+  <ResponseField name="nombre" type="string">
+    Payment method name (e.g., "Efectivo", "Tarjeta Débito")
+  </ResponseField>
+  
+  <ResponseField name="codigo" type="string">
+    Payment method code (e.g., "EFECTIVO", "DEBITO")
+  </ResponseField>
+  
+  <ResponseField name="transacciones" type="integer">
+    Number of transactions using this payment method
+  </ResponseField>
+  
+  <ResponseField name="total" type="number">
+    Total amount processed through this payment method
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="caja" type="object" nullable>
+  Information about the currently active cash session (null if no session is open):
+  
+  <ResponseField name="id" type="integer">
+    Cash session ID
+  </ResponseField>
+  
+  <ResponseField name="inicio" type="datetime">
+    Session start timestamp (ISO format)
+  </ResponseField>
+  
+  <ResponseField name="fondo" type="number">
+    Starting cash amount (fondo de caja)
+  </ResponseField>
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X GET "https://api.torn.com/reports/dashboard?fecha=2024-03-15" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```bash Today's Report
+curl -X GET https://api.torn.com/reports/dashboard \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```json Response
+{
+  "fecha": "2024-03-15",
+  "kpis": {
+    "total_ventas": 1547890,
+    "total_neto": 1300748,
+    "total_iva": 247142,
+    "num_ventas": 47,
+    "ticket_promedio": 32934,
+    "num_notas_credito": 2,
+    "total_notas_credito": 45600
+  },
+  "ventas_por_hora": [
+    {
+      "hora": "09:00",
+      "cantidad": 3,
+      "total": 87450
+    },
+    {
+      "hora": "10:00",
+      "cantidad": 5,
+      "total": 142380
+    },
+    {
+      "hora": "11:00",
+      "cantidad": 8,
+      "total": 234920
+    }
+  ],
+  "top_productos": [
+    {
+      "nombre": "Zapatillas Running Pro",
+      "sku": "ZAP-001",
+      "cantidad": 12,
+      "total": 456000
+    },
+    {
+      "nombre": "Polera Deportiva",
+      "sku": "POL-045",
+      "cantidad": 28,
+      "total": 278000
+    }
+  ],
+  "medios_pago": [
+    {
+      "nombre": "Efectivo",
+      "codigo": "EFECTIVO",
+      "transacciones": 23,
+      "total": 678900
+    },
+    {
+      "nombre": "Tarjeta Débito",
+      "codigo": "DEBITO",
+      "transacciones": 18,
+      "total": 623450
+    },
+    {
+      "nombre": "Tarjeta Crédito",
+      "codigo": "CREDITO",
+      "transacciones": 6,
+      "total": 245540
+    }
+  ],
+  "caja": {
+    "id": 42,
+    "inicio": "2024-03-15T09:00:00Z",
+    "fondo": 50000
+  }
+}
+```
+</RequestExample>
+
+---
+
+## Document Type Filtering
+
+The dashboard report includes specific document types:
+
+<Card title="Included Document Types" icon="check">
+  - **Type 33**: Facturas (Invoices)
+  - **Type 39**: Boletas (Receipts)
+  - **Type 61**: Notas de Crédito (Credit Notes) - counted separately
+</Card>
+
+<Card title="Excluded Document Types" icon="x">
+  Other document types like quotes, delivery notes, or internal documents are not included in the sales metrics.
+</Card>
+
+---
+
+## Use Cases
+
+<AccordionGroup>
+  <Accordion title="Real-time Dashboard">
+    Display live business metrics on a management dashboard. Update every few minutes to show:
+    - Current day's sales performance
+    - Busiest hours for staffing decisions
+    - Most popular products for inventory planning
+    - Payment method preferences
+  </Accordion>
+
+  <Accordion title="End-of-Day Reporting">
+    Generate comprehensive daily reports for managers:
+    - Sales vs. target tracking
+    - Credit note analysis (returns/refunds)
+    - Cash session reconciliation
+    - Performance by hour to identify peak times
+  </Accordion>
+
+  <Accordion title="Multi-Location Analytics">
+    Compare performance across different stores or locations by calling this endpoint for each tenant/location.
+  </Accordion>
+
+  <Accordion title="Historical Analysis">
+    Retrieve reports for past dates to analyze trends:
+    ```bash
+    curl "https://api.torn.com/reports/dashboard?fecha=2024-03-01"
+    curl "https://api.torn.com/reports/dashboard?fecha=2024-03-08"
+    curl "https://api.torn.com/reports/dashboard?fecha=2024-03-15"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Best Practices
+
+<Tip>
+  **Time Zone Considerations**: The date parameter uses the system's configured time zone. Ensure your application handles time zones correctly when requesting reports for specific dates.
+</Tip>
+
+<Tip>
+  **Caching**: Dashboard data for past dates is unlikely to change. Consider caching historical reports to improve performance and reduce API calls.
+</Tip>
+
+<Warning>
+  **Access Control**: This endpoint requires admin privileges (`require_admin` dependency). Regular users cannot access these reports. Ensure your frontend properly handles 403 Forbidden responses.
+</Warning>

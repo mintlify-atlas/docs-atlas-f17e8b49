@@ -1,80 +1,266 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get up and running with Torn in 5 minutes
+icon: rocket
 ---
 
-## Get started in three steps
+This guide will help you set up Torn and process your first sale in just a few minutes.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, ensure you have:
+
+- **Python 3.8+** installed
+- **Node.js 16+** and npm
+- **PostgreSQL 12+** running
+- A code editor
+
+## Quick Setup
+
+<Steps>
+  <Step title="Clone and Setup Backend">
+    Clone the repository and set up the Python environment:
+
+    ```bash
+    git clone https://github.com/AstralMoonlight/torn.git
+    cd torn
+
+    # Create virtual environment
+    python3 -m venv .venv
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+    # Install dependencies
+    pip install -r requirements.txt
+    ```
+  </Step>
+
+  <Step title="Configure Database">
+    Create a `.env` file in the project root:
+
+    ```bash .env
+    # Database Configuration
+    TORN_DB_URL=postgresql://user:password@localhost/torn_db
+
+    # JWT Secret (generate a random string)
+    SECRET_KEY=your-secret-key-here-change-in-production
+
+    # Optional: SII Integration
+    SII_CERT_PATH=/path/to/certificate.pfx
+    SII_CERT_PASSWORD=your-cert-password
+    ```
+
+    The database will be created automatically on first run.
+  </Step>
+
+  <Step title="Start the Backend">
+    Launch the FastAPI backend:
+
+    ```bash
+    uvicorn app.main:app --reload --port 8000
+    ```
+
+    Your API is now running at `http://localhost:8000`. Visit `http://localhost:8000/docs` to see the interactive API documentation.
+  </Step>
+
+  <Step title="Create Your First Tenant">
+    Create a tenant (business entity) using the API. First, you'll need to authenticate as a global admin (this happens automatically on first startup):
+
+    <CodeGroup>
+    ```bash cURL
+    curl -X POST http://localhost:8000/saas/tenants \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+      -d '{
+        "name": "Mi Tienda SpA",
+        "rut": "76123456-7",
+        "address": "Av. Providencia 1234",
+        "commune": "Providencia",
+        "city": "Santiago",
+        "giro": "Venta al por menor",
+        "billing_day": 15,
+        "economic_activities": [
+          {
+            "code": "522900",
+            "name": "Venta al por menor en comercios no especializados"
+          }
+        ]
+      }'
+    ```
+
+    ```python Python
+    import requests
+
+    url = "http://localhost:8000/saas/tenants"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "name": "Mi Tienda SpA",
+        "rut": "76123456-7",
+        "address": "Av. Providencia 1234",
+        "commune": "Providencia",
+        "city": "Santiago",
+        "giro": "Venta al por menor",
+        "billing_day": 15,
+        "economic_activities": [
+            {
+                "code": "522900",
+                "name": "Venta al por menor en comercios no especializados"
+            }
+        ]
+    }
+
+    response = requests.post(url, headers=headers, json=data)
+    tenant = response.json()
+    print(f"Tenant created: {tenant['schema_name']}")
+    ```
+    </CodeGroup>
+
+    <Note>
+      This automatically provisions a new database schema for the tenant with complete isolation.
+    </Note>
+  </Step>
+
+  <Step title="Add Products">
+    Add some products to your catalog:
+
+    ```bash
+    curl -X POST http://localhost:8000/products/ \
+      -H "X-Tenant-ID: 1" \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "nombre": "Coca-Cola 1.5L",
+        "precio_venta": 1500,
+        "precio_compra": 900,
+        "stock_actual": 100,
+        "stock_minimo": 10,
+        "controla_stock": true
+      }'
+    ```
+  </Step>
+
+  <Step title="Open Cash Session">
+    Before making sales, open a cash session:
+
+    ```bash
+    curl -X POST http://localhost:8000/cash/open \
+      -H "X-Tenant-ID: 1" \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "initial_cash": 50000,
+        "notes": "Turno matutino"
+      }'
+    ```
+  </Step>
+
+  <Step title="Create Your First Sale">
+    Process a sale with automatic DTE generation:
+
+    ```bash
+    curl -X POST http://localhost:8000/sales/ \
+      -H "X-Tenant-ID: 1" \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "customer_rut": "66666666-6",
+        "document_type": 39,
+        "items": [
+          {
+            "product_id": 1,
+            "quantity": 2,
+            "unit_price": 1500
+          }
+        ],
+        "payments": [
+          {
+            "method": "EFECTIVO",
+            "amount": 3000
+          }
+        ]
+      }'
+    ```
+
+    This single request:
+    - Validates stock availability
+    - Deducts inventory with Kardex tracking
+    - Processes the payment
+    - Generates a DTE (electronic tax document)
+    - Returns the complete sale with folio number
+
+    <Tip>
+      Document type 39 is for "Boleta Electrónica" (retail receipt). Use type 33 for "Factura" (invoice).
+    </Tip>
+  </Step>
+</Steps>
+
+## What Just Happened?
+
+Behind the scenes, Torn executed an **atomic transaction** that:
+
+1. ✅ Verified the cash session is open
+2. ✅ Validated product availability and stock
+3. ✅ Created the sale record
+4. ✅ Deducted inventory with FIFO/LIFO tracking
+5. ✅ Recorded the Kardex movement
+6. ✅ Processed payment method
+7. ✅ Assigned a fiscal folio (CAF)
+8. ✅ Generated the DTE XML
+9. ✅ Committed everything or rolled back on any error
+
+All in **milliseconds** with complete data integrity.
+
+## Optional: Start the Frontend
+
+For a complete POS experience, start the Next.js frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Access the UI at `http://localhost:3000`
+
+<Warning>
+  The frontend requires the backend to be running on port 8000.
+</Warning>
+
+## Troubleshooting
 
 <AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
+  <Accordion title="Database connection errors">
+    Ensure PostgreSQL is running and the connection string in `.env` is correct. The format is:
+    ```
+    postgresql://username:password@host:port/database
+    ```
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
+
+  <Accordion title="No cash session open">
+    You must open a cash session before creating sales. Use `POST /cash/open` with an initial cash amount.
+  </Accordion>
+
+  <Accordion title="Product not found or insufficient stock">
+    Verify the product exists and has sufficient stock. Use `GET /products/` to list all products and `GET /inventory/` to check stock levels.
+  </Accordion>
+
+  <Accordion title="Authentication errors">
+    Make sure to include the JWT token in the `Authorization: Bearer TOKEN` header for all protected endpoints.
   </Accordion>
 </AccordionGroup>
 
-### Step 2: Deploy your changes
+## Next Steps
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+<CardGroup cols={3}>
+  <Card title="Multi-Tenancy" icon="users" href="/concepts/multi-tenancy">
+    Learn about tenant isolation
+  </Card>
+  <Card title="Sales Process" icon="cash-register" href="/guides/sales-process">
+    Master the complete sales workflow
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore all endpoints
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

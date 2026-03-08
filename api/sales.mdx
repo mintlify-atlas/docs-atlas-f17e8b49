@@ -1,0 +1,353 @@
+---
+title: 'Sales'
+description: 'Create and manage sales transactions with automatic DTE generation'
+---
+
+## Create Sale
+
+<RequestExample>
+```bash cURL
+curl -X POST https://api.example.com/sales/ \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "rut_cliente": "12345678-9",
+    "tipo_dte": 33,
+    "items": [
+      {
+        "product_id": 1,
+        "cantidad": 2
+      },
+      {
+        "product_id": 5,
+        "cantidad": 1
+      }
+    ],
+    "payments": [
+      {
+        "payment_method_id": 1,
+        "amount": 50000
+      },
+      {
+        "payment_method_id": 2,
+        "amount": 30000,
+        "transaction_code": "AUTH123456"
+      }
+    ],
+    "descripcion": "Venta en tienda"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 201 Created
+{
+  "id": 123,
+  "folio": 1001,
+  "tipo_dte": 33,
+  "fecha_emision": "2024-03-15T14:30:00Z",
+  "monto_neto": 67226.89,
+  "iva": 12773.11,
+  "monto_total": 80000.00,
+  "descripcion": "Venta en tienda",
+  "created_at": "2024-03-15T14:30:00Z",
+  "related_sale_id": null,
+  "referencias": null,
+  "customer": {
+    "id": 45,
+    "rut": "12345678-9",
+    "razon_social": "Juan Pérez",
+    "giro": "Comercio",
+    "direccion": "Av. Principal 123",
+    "comuna": "Santiago",
+    "ciudad": "Santiago",
+    "email": "juan@example.com",
+    "current_balance": 0,
+    "is_active": true,
+    "created_at": "2024-01-10T10:00:00Z"
+  },
+  "details": [
+    {
+      "product_id": 1,
+      "cantidad": 2,
+      "precio_unitario": 25000.00,
+      "descuento": 0,
+      "subtotal": 50000.00,
+      "product": {
+        "id": 1,
+        "codigo_interno": "PROD-001",
+        "nombre": "Producto A",
+        "precio_neto": 25000.00,
+        "stock_actual": 48
+      }
+    },
+    {
+      "product_id": 5,
+      "cantidad": 1,
+      "precio_unitario": 30000.00,
+      "descuento": 0,
+      "subtotal": 30000.00,
+      "product": {
+        "id": 5,
+        "codigo_interno": "PROD-005",
+        "nombre": "Producto B",
+        "precio_neto": 30000.00,
+        "stock_actual": 19
+      }
+    }
+  ]
+}
+```
+</ResponseExample>
+
+<ParamField path="rut_cliente" type="string" required>
+  Customer's RUT (Chilean tax ID). Must be valid format with verification digit (e.g., "12345678-9").
+</ParamField>
+
+<ParamField path="tipo_dte" type="integer" default={33}>
+  SII document type code:
+  - `33`: Factura Electrónica (Invoice)
+  - `34`: Factura Exenta (Exempt Invoice)
+  - `39`: Boleta Electrónica (Receipt)
+  - `61`: Nota de Crédito (Credit Note)
+</ParamField>
+
+<ParamField path="items" type="array" required>
+  Array of sale items. Each item includes:
+  
+  <ParamField path="product_id" type="integer" required>
+    ID of the product to sell
+  </ParamField>
+  
+  <ParamField path="cantidad" type="decimal" required>
+    Quantity to sell
+  </ParamField>
+</ParamField>
+
+<ParamField path="payments" type="array" required>
+  Array of payment methods used. Multiple payments supported (split payment).
+  
+  <ParamField path="payment_method_id" type="integer" required>
+    ID of the payment method (see [Payment Methods](/api/payment-methods))
+  </ParamField>
+  
+  <ParamField path="amount" type="decimal" required>
+    Amount paid with this method. Total of all payments must equal or exceed sale total.
+  </ParamField>
+  
+  <ParamField path="transaction_code" type="string">
+    Transaction authorization code (e.g., credit card voucher number)
+  </ParamField>
+</ParamField>
+
+<ParamField path="descripcion" type="string">
+  Optional description or notes for the sale
+</ParamField>
+
+<ParamField path="referencias" type="array">
+  Document references (required for adjustment documents: types 56, 61, 111, 112)
+  
+  <ParamField path="tipo_documento" type="string" required>
+    Referenced document type code (e.g., "33", "801", "52")
+  </ParamField>
+  
+  <ParamField path="folio" type="string" required>
+    Folio number of the referenced document
+  </ParamField>
+  
+  <ParamField path="fecha" type="string" required>
+    Date of referenced document (YYYY-MM-DD format)
+  </ParamField>
+  
+  <ParamField path="sii_reason_code" type="integer" required>
+    SII reason code for the reference:
+    - `1`: Anula documento (Cancels document)
+    - `2`: Corrige texto (Corrects text)
+    - `3`: Corrige monto (Corrects amount)
+  </ParamField>
+</ParamField>
+
+<ResponseField name="id" type="integer">
+  Unique sale ID
+</ResponseField>
+
+<ResponseField name="folio" type="integer">
+  Fiscal folio number assigned from CAF (correlative per DTE type)
+</ResponseField>
+
+<ResponseField name="tipo_dte" type="integer">
+  SII document type code
+</ResponseField>
+
+<ResponseField name="fecha_emision" type="datetime">
+  Document emission timestamp
+</ResponseField>
+
+<ResponseField name="monto_neto" type="decimal">
+  Net amount (before tax)
+</ResponseField>
+
+<ResponseField name="iva" type="decimal">
+  VAT amount (19% of net amount)
+</ResponseField>
+
+<ResponseField name="monto_total" type="decimal">
+  Total amount (net + VAT)
+</ResponseField>
+
+<ResponseField name="customer" type="object">
+  Customer information (see [Customers](/api/customers))
+</ResponseField>
+
+<ResponseField name="details" type="array">
+  Array of sale line items with product details and pricing
+</ResponseField>
+
+### Transaction Flow
+
+The sale creation endpoint executes the following atomic transaction:
+
+1. **Cash Session Validation**: Verifies the seller has an active cash session open
+2. **Customer Validation**: Confirms customer exists in the system
+3. **Reference Validation**: For adjustment documents (56, 61, 111, 112), validates required references
+4. **Product Validation**: Checks each product exists and is active
+5. **Stock Control**: For products with stock control enabled:
+   - Validates sufficient stock available
+   - Decrements stock quantity
+   - Creates stock movement record (type: SALIDA, reason: VENTA)
+6. **Payment Validation**: Ensures total payments equal or exceed sale total
+7. **Folio Assignment**: Assigns next available folio from CAF (Código de Autorización de Folios)
+8. **Internal Credit**: If payment method is `CREDITO_INTERNO`, increases customer's balance
+9. **DTE Generation**: Generates XML for electronic tax document
+10. **Database Commit**: Persists all changes atomically
+
+If any step fails, the entire transaction is rolled back.
+
+### Error Responses
+
+<ResponseExample>
+```json 409 Conflict - Cash session not open
+{
+  "detail": "El vendedor (ID 5) no tiene turno de caja abierto."
+}
+```
+
+```json 404 Not Found - Customer not found
+{
+  "detail": "Cliente con RUT 12345678-9 no encontrado"
+}
+```
+
+```json 409 Conflict - Insufficient stock
+{
+  "detail": "Stock insuficiente para Producto A. Disponible: 10, Solicitado: 15"
+}
+```
+
+```json 400 Bad Request - Payment amount mismatch
+{
+  "detail": "Monto de pagos (50000) inferior al total de la venta (80000)"
+}
+```
+
+```json 400 Bad Request - Missing references
+{
+  "detail": "Los documentos de ajuste (DTE 61) requieren obligatoriamente referencias al documento original."
+}
+```
+
+```json 500 Internal Server Error - DTE generation failed
+{
+  "detail": "Error al generar el DTE. Transacción revertida."
+}
+```
+</ResponseExample>
+
+---
+
+## List Sales
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/sales/?skip=0&limit=50 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+[
+  {
+    "id": 123,
+    "folio": 1001,
+    "tipo_dte": 33,
+    "fecha_emision": "2024-03-15T14:30:00Z",
+    "monto_neto": 67226.89,
+    "iva": 12773.11,
+    "monto_total": 80000.00,
+    "customer": {
+      "id": 45,
+      "rut": "12345678-9",
+      "razon_social": "Juan Pérez"
+    },
+    "details": [
+      {
+        "product_id": 1,
+        "cantidad": 2,
+        "precio_unitario": 25000.00,
+        "subtotal": 50000.00,
+        "product": {
+          "id": 1,
+          "nombre": "Producto A"
+        }
+      }
+    ]
+  }
+]
+```
+</ResponseExample>
+
+<ParamField query="skip" type="integer" default={0}>
+  Number of records to skip for pagination (0-based offset)
+</ParamField>
+
+<ParamField query="limit" type="integer" default={50}>
+  Maximum number of records to return (1-200)
+</ParamField>
+
+Returns sales ordered by creation date descending (most recent first), with customer and product details eagerly loaded.
+
+---
+
+## Get Sale PDF
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/sales/123/pdf \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+Generates an HTML preview of the tax document, ready for printing or PDF conversion. The format (80mm thermal or letter size) is determined by system settings.
+
+<ParamField path="sale_id" type="integer" required>
+  ID of the sale to generate PDF for
+</ParamField>
+
+Returns HTML content rendered from Jinja2 template with sale, issuer, and customer data.
+
+### Error Responses
+
+<ResponseExample>
+```json 404 Not Found - Sale not found
+{
+  "detail": "Venta ID 123 no encontrada"
+}
+```
+
+```json 404 Not Found - Issuer not configured
+{
+  "detail": "Emisor no configurado. Use PUT /issuer/ primero."
+}
+```
+</ResponseExample>

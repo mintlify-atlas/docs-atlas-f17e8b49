@@ -1,0 +1,260 @@
+---
+title: 'Returns'
+description: 'Process product returns and generate credit notes (Notas de Crédito)'
+---
+
+## Create Return
+
+<RequestExample>
+```bash cURL
+curl -X POST https://api.example.com/sales/return \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "original_sale_id": 123,
+    "tipo_dte": 61,
+    "sii_reason_code": 1,
+    "items": [
+      {
+        "product_id": 1,
+        "cantidad": 2
+      }
+    ],
+    "reason": "Cliente insatisfecho con el producto",
+    "return_method_id": 1
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 201 Created
+{
+  "id": 456,
+  "folio": 2001,
+  "tipo_dte": 61,
+  "fecha_emision": "2024-03-16T10:15:00Z",
+  "monto_neto": 42016.81,
+  "iva": 7983.19,
+  "monto_total": 50000.00,
+  "descripcion": "Ajuste Venta #1001: Cliente insatisfecho con el producto",
+  "created_at": "2024-03-16T10:15:00Z",
+  "related_sale_id": 123,
+  "referencias": [
+    {
+      "tipo_documento": "33",
+      "folio": "1001",
+      "fecha": "2024-03-15",
+      "sii_reason_code": 1
+    }
+  ],
+  "customer": {
+    "id": 45,
+    "rut": "12345678-9",
+    "razon_social": "Juan Pérez",
+    "current_balance": 0
+  },
+  "details": [
+    {
+      "product_id": 1,
+      "cantidad": 2,
+      "precio_unitario": 25000.00,
+      "descuento": 0,
+      "subtotal": 50000.00,
+      "product": {
+        "id": 1,
+        "codigo_interno": "PROD-001",
+        "nombre": "Producto A",
+        "stock_actual": 52
+      }
+    }
+  ]
+}
+```
+</ResponseExample>
+
+<ParamField path="original_sale_id" type="integer" required>
+  ID of the original sale being returned. Must exist in the system.
+</ParamField>
+
+<ParamField path="tipo_dte" type="integer" default={61}>
+  SII adjustment document type code:
+  - `56`: Nota de Débito Electrónica (Debit Note)
+  - `61`: Nota de Crédito Electrónica (Credit Note)
+  - `111`: Nota de Crédito Exportación (Export Credit Note)
+  - `112`: Nota de Débito Exportación (Export Debit Note)
+</ParamField>
+
+<ParamField path="sii_reason_code" type="integer" default={1}>
+  SII reason code for the adjustment:
+  - `1`: Anula documento de referencia (Cancels referenced document)
+  - `2`: Corrige texto del documento de referencia (Corrects text)
+  - `3`: Corrige montos (Corrects amounts)
+</ParamField>
+
+<ParamField path="items" type="array" required>
+  Array of items being returned
+  
+  <ParamField path="product_id" type="integer" required>
+    ID of the product being returned
+  </ParamField>
+  
+  <ParamField path="cantidad" type="decimal" required>
+    Quantity being returned
+  </ParamField>
+</ParamField>
+
+<ParamField path="reason" type="string" required>
+  Explanation for the return (e.g., "Producto defectuoso", "Cliente insatisfecho")
+</ParamField>
+
+<ParamField path="return_method_id" type="integer" required>
+  Payment method ID for the refund. Common options:
+  - Cash refund (method code: `EFECTIVO`)
+  - Store credit (method code: `CREDITO_INTERNO`)
+  
+  See [Payment Methods](/api/payment-methods) for available methods.
+</ParamField>
+
+<ResponseField name="id" type="integer">
+  Unique ID of the credit note
+</ResponseField>
+
+<ResponseField name="folio" type="integer">
+  Fiscal folio number assigned for the credit note (separate sequence from sales)
+</ResponseField>
+
+<ResponseField name="related_sale_id" type="integer">
+  ID of the original sale that is being adjusted
+</ResponseField>
+
+<ResponseField name="referencias" type="array">
+  Automatic reference to the original sale document, including:
+  - Original document type
+  - Original folio number
+  - Original emission date
+  - SII reason code
+</ResponseField>
+
+## Return Processing Flow
+
+The return endpoint executes the following atomic transaction:
+
+1. **Original Sale Validation**: Verifies the original sale exists
+2. **Product Validation**: Confirms each returned product exists
+3. **Stock Reinstatement**: For products with stock control enabled:
+   - Increases stock quantity by returned amount
+   - Creates stock movement record (type: ENTRADA, reason: DEVOLUCION)
+4. **Price Lookup**: Uses the original sale price for each product (not current price)
+5. **Amount Calculation**: Computes net amount, VAT (19%), and total for returned items
+6. **Folio Assignment**: Assigns next available folio from adjustment document CAF
+7. **Reference Generation**: Automatically creates reference to original sale
+8. **Credit Note Creation**: Generates new Sale record with adjustment type
+9. **Refund Processing**: Based on `return_method_id`:
+   - `CREDITO_INTERNO`: Decreases customer's balance (credits their account)
+   - `EFECTIVO`: Records cash refund (requires cash session validation)
+   - Other methods: Records refund transaction
+10. **Database Commit**: Persists all changes atomically
+
+If any step fails, the entire transaction is rolled back.
+
+<Info>
+  **Historical Pricing**: Returns use the original sale price for each product, ensuring accurate credit calculation even if product prices have changed since the original sale.
+</Info>
+
+## Return Methods
+
+### Cash Refund
+Returns money to the customer immediately:
+```json
+{
+  "return_method_id": 1,  // EFECTIVO
+  ...
+}
+```
+
+### Store Credit
+Applies credit to customer's account for future purchases:
+```json
+{
+  "return_method_id": 5,  // CREDITO_INTERNO
+  ...
+}
+```
+
+When using `CREDITO_INTERNO`, the return amount is **subtracted** from the customer's `current_balance`, effectively crediting their account.
+
+## SII Reason Codes
+
+<AccordionGroup>
+  <Accordion title="Code 1: Anula documento">
+    Use when the return completely or partially cancels the original sale. Most common for product returns.
+    
+    **Example**: Customer returns defective merchandise.
+  </Accordion>
+  
+  <Accordion title="Code 2: Corrige texto">
+    Use when correcting textual information on the original document (customer details, descriptions, etc.)
+    
+    **Example**: Customer name was spelled incorrectly on invoice.
+  </Accordion>
+  
+  <Accordion title="Code 3: Corrige montos">
+    Use when correcting pricing or calculation errors on the original document.
+    
+    **Example**: Wrong price was applied, needs adjustment.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  Adjustment documents (types 56, 61, 111, 112) **must** include a valid `sii_reason_code`. The system will reject requests without this field.
+</Warning>
+
+## Error Responses
+
+<ResponseExample>
+```json 404 Not Found - Original sale not found
+{
+  "detail": "Venta original no encontrada"
+}
+```
+
+```json 404 Not Found - Product not found
+{
+  "detail": "Producto 1 no encontrado"
+}
+```
+
+```json 400 Bad Request - Invalid DTE type
+{
+  "detail": "El tipo de DTE para ajuste debe ser 56, 61, 111 o 112."
+}
+```
+
+```json 400 Bad Request - Invalid return method
+{
+  "detail": "Medio de devolución invalido"
+}
+```
+</ResponseExample>
+
+## Partial Returns
+
+You can return a subset of items or partial quantities from the original sale:
+
+```json Example: Return only 1 of 2 items
+{
+  "original_sale_id": 123,
+  "items": [
+    {
+      "product_id": 1,
+      "cantidad": 1  // Original sale had 2
+    }
+  ],
+  "reason": "Cliente solo devuelve 1 unidad",
+  "return_method_id": 5
+}
+```
+
+<Info>
+  The system does not currently validate that returned quantities don't exceed original sale quantities. Operators should verify this manually to ensure data accuracy.
+</Info>

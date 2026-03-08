@@ -1,0 +1,513 @@
+---
+title: 'Purchases'
+description: 'Manage inventory purchases and stock updates'
+---
+
+## Overview
+
+The Purchases API handles the registration of inventory purchases from providers. When a purchase is created, the system automatically:
+
+- Updates product stock quantities (for products with inventory control enabled)
+- Updates product cost prices based on the latest purchase price
+- Records stock movements for audit trails
+- Calculates totals including IVA (19% tax for invoices)
+
+All operations are atomic - if any part fails, the entire transaction is rolled back.
+
+## Create Purchase
+
+<api method="POST" url="/purchases/">
+  Register a new purchase and update inventory atomically.
+</api>
+
+### Request Body
+
+<ParamField body="provider_id" type="integer" required>
+  ID of the provider from whom the purchase is made.
+</ParamField>
+
+<ParamField body="folio" type="string">
+  Document number (invoice or receipt number).
+</ParamField>
+
+<ParamField body="tipo_documento" type="string">
+  Document type. Options: `FACTURA`, `BOLETA`, `SIN_DOCUMENTO`. Default: `FACTURA`.
+</ParamField>
+
+<ParamField body="items" type="array" required>
+  Array of purchase items. Each item contains:
+  
+  - `product_id` (integer, required): Product identifier
+  - `cantidad` (decimal, required): Quantity purchased
+  - `precio_costo_unitario` (decimal, required): Unit cost price (net amount)
+</ParamField>
+
+<ParamField body="observacion" type="string">
+  Additional notes or observations about the purchase.
+</ParamField>
+
+<ParamField body="fecha_compra" type="datetime">
+  Purchase date. If not provided, current timestamp is used.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer">
+  Unique purchase identifier.
+</ResponseField>
+
+<ResponseField name="provider_id" type="integer">
+  Provider identifier.
+</ResponseField>
+
+<ResponseField name="folio" type="string">
+  Document number.
+</ResponseField>
+
+<ResponseField name="tipo_documento" type="string">
+  Document type (FACTURA, BOLETA, or SIN_DOCUMENTO).
+</ResponseField>
+
+<ResponseField name="fecha_compra" type="datetime">
+  Purchase date.
+</ResponseField>
+
+<ResponseField name="monto_neto" type="decimal">
+  Net amount (sum of all item subtotals).
+</ResponseField>
+
+<ResponseField name="iva" type="decimal">
+  IVA tax amount (19% for FACTURA, 0 for other document types).
+</ResponseField>
+
+<ResponseField name="monto_total" type="decimal">
+  Total amount (monto_neto + iva).
+</ResponseField>
+
+<ResponseField name="observacion" type="string">
+  Additional notes.
+</ResponseField>
+
+<ResponseField name="created_at" type="datetime">
+  Timestamp when the purchase was registered.
+</ResponseField>
+
+<ResponseField name="provider" type="object">
+  Nested provider object with complete provider information.
+</ResponseField>
+
+<ResponseField name="details" type="array">
+  Array of purchase detail items, each containing product information, quantity, unit cost, and subtotal.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST https://api.example.com/purchases/ \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "provider_id": 1,
+    "folio": "F-00123",
+    "tipo_documento": "FACTURA",
+    "items": [
+      {
+        "product_id": 10,
+        "cantidad": 50,
+        "precio_costo_unitario": 1500.00
+      },
+      {
+        "product_id": 15,
+        "cantidad": 30,
+        "precio_costo_unitario": 2800.00
+      }
+    ],
+    "observacion": "Compra de reposición mensual",
+    "fecha_compra": "2026-03-08T10:00:00Z"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 201 Created
+{
+  "id": 1,
+  "provider_id": 1,
+  "folio": "F-00123",
+  "tipo_documento": "FACTURA",
+  "fecha_compra": "2026-03-08T10:00:00Z",
+  "monto_neto": 159000.00,
+  "iva": 30210.00,
+  "monto_total": 189210.00,
+  "observacion": "Compra de reposición mensual",
+  "created_at": "2026-03-08T10:30:00Z",
+  "provider": {
+    "id": 1,
+    "rut": "76543210-9",
+    "razon_social": "Distribuidora Central S.A.",
+    "giro": "Importación y distribución",
+    "direccion": "Av. Industrial 2500",
+    "ciudad": "Santiago",
+    "email": "ventas@distcentral.cl",
+    "telefono": "+56 2 2987 6543",
+    "is_active": true,
+    "created_at": "2026-03-01T10:30:00Z",
+    "updated_at": null
+  },
+  "details": [
+    {
+      "id": 1,
+      "product_id": 10,
+      "cantidad": 50,
+      "precio_costo_unitario": 1500.00,
+      "subtotal": 75000.00,
+      "product": {
+        "id": 10,
+        "codigo_interno": "PROD-010",
+        "nombre": "Producto A",
+        "precio_neto": 2000.00,
+        "stock_actual": 150,
+        "controla_stock": true
+      }
+    },
+    {
+      "id": 2,
+      "product_id": 15,
+      "cantidad": 30,
+      "precio_costo_unitario": 2800.00,
+      "subtotal": 84000.00,
+      "product": {
+        "id": 15,
+        "codigo_interno": "PROD-015",
+        "nombre": "Producto B",
+        "precio_neto": 3500.00,
+        "stock_actual": 80,
+        "controla_stock": true
+      }
+    }
+  ]
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "Producto 15 no encontrado"
+}
+```
+
+```json 400 Bad Request
+{
+  "detail": "El producto 'Zapatos' tiene variantes. Debe ingresar la compra a la variante específica."
+}
+```
+</ResponseExample>
+
+## List Purchases
+
+<api method="GET" url="/purchases/">
+  Retrieve all registered purchases, ordered by most recent first.
+</api>
+
+### Response
+
+Returns an array of purchase objects with full details including provider and items.
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/purchases/ \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+[
+  {
+    "id": 2,
+    "provider_id": 1,
+    "folio": "F-00124",
+    "tipo_documento": "FACTURA",
+    "fecha_compra": "2026-03-08T14:00:00Z",
+    "monto_neto": 250000.00,
+    "iva": 47500.00,
+    "monto_total": 297500.00,
+    "observacion": null,
+    "created_at": "2026-03-08T14:15:00Z",
+    "provider": { },
+    "details": [ ]
+  },
+  {
+    "id": 1,
+    "provider_id": 1,
+    "folio": "F-00123",
+    "tipo_documento": "FACTURA",
+    "fecha_compra": "2026-03-08T10:00:00Z",
+    "monto_neto": 159000.00,
+    "iva": 30210.00,
+    "monto_total": 189210.00,
+    "observacion": "Compra de reposición mensual",
+    "created_at": "2026-03-08T10:30:00Z",
+    "provider": { },
+    "details": [ ]
+  }
+]
+```
+</ResponseExample>
+
+## Get Purchase
+
+<api method="GET" url="/purchases/{purchase_id}">
+  Retrieve details of a specific purchase.
+</api>
+
+### Path Parameters
+
+<ParamField path="purchase_id" type="integer" required>
+  Unique purchase identifier.
+</ParamField>
+
+### Response
+
+Returns a single purchase object with complete details.
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/purchases/1 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 1,
+  "provider_id": 1,
+  "folio": "F-00123",
+  "tipo_documento": "FACTURA",
+  "fecha_compra": "2026-03-08T10:00:00Z",
+  "monto_neto": 159000.00,
+  "iva": 30210.00,
+  "monto_total": 189210.00,
+  "observacion": "Compra de reposición mensual",
+  "created_at": "2026-03-08T10:30:00Z",
+  "provider": {
+    "id": 1,
+    "rut": "76543210-9",
+    "razon_social": "Distribuidora Central S.A."
+  },
+  "details": [
+    {
+      "id": 1,
+      "product_id": 10,
+      "cantidad": 50,
+      "precio_costo_unitario": 1500.00,
+      "subtotal": 75000.00,
+      "product": { }
+    }
+  ]
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "Compra no encontrada"
+}
+```
+</ResponseExample>
+
+## Update Purchase
+
+<api method="PUT" url="/purchases/{purchase_id}">
+  Update an existing purchase and adjust inventory accordingly.
+</api>
+
+### Path Parameters
+
+<ParamField path="purchase_id" type="integer" required>
+  Unique purchase identifier.
+</ParamField>
+
+### Request Body
+
+Use the same structure as creating a purchase. All fields from `PurchaseCreate` are accepted.
+
+### Behavior
+
+When updating a purchase:
+1. Old stock quantities are reversed (subtracted from inventory)
+2. Old purchase details are deleted
+3. New stock quantities are applied (added to inventory)
+4. New purchase details are created
+5. Product costs are updated based on new prices
+6. Stock movements are recorded for audit trail
+
+<RequestExample>
+```bash cURL
+curl -X PUT https://api.example.com/purchases/1 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "provider_id": 1,
+    "folio": "F-00123-CORR",
+    "tipo_documento": "FACTURA",
+    "items": [
+      {
+        "product_id": 10,
+        "cantidad": 60,
+        "precio_costo_unitario": 1450.00
+      }
+    ],
+    "observacion": "Compra corregida"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 1,
+  "provider_id": 1,
+  "folio": "F-00123-CORR",
+  "tipo_documento": "FACTURA",
+  "fecha_compra": "2026-03-08T10:00:00Z",
+  "monto_neto": 87000.00,
+  "iva": 16530.00,
+  "monto_total": 103530.00,
+  "observacion": "Compra corregida",
+  "created_at": "2026-03-08T10:30:00Z",
+  "provider": { },
+  "details": [ ]
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "Compra no encontrada"
+}
+```
+</ResponseExample>
+
+## Delete Purchase
+
+<api method="DELETE" url="/purchases/{purchase_id}">
+  Delete a purchase and reverse its inventory effects.
+</api>
+
+### Path Parameters
+
+<ParamField path="purchase_id" type="integer" required>
+  Unique purchase identifier.
+</ParamField>
+
+### Behavior
+
+When deleting a purchase:
+1. Stock quantities are reversed (subtracted from current inventory)
+2. Stock movements are recorded with "AJUSTE" (adjustment) reason
+3. Purchase and all its details are permanently deleted
+
+### Response
+
+Returns no content on success.
+
+<RequestExample>
+```bash cURL
+curl -X DELETE https://api.example.com/purchases/1 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 204 No Content
+```
+
+```json 404 Not Found
+{
+  "detail": "Compra no encontrada"
+}
+```
+</ResponseExample>
+
+## Get Purchase PDF
+
+<api method="GET" url="/purchases/{purchase_id}/pdf">
+  Generate an HTML preview of the purchase for printing.
+</api>
+
+### Path Parameters
+
+<ParamField path="purchase_id" type="integer" required>
+  Unique purchase identifier.
+</ParamField>
+
+### Response
+
+Returns an HTML document formatted for printing, including:
+- Company (issuer) information
+- Provider details
+- Purchase items with quantities and prices
+- Totals (net, IVA, total)
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/purchases/1/pdf \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```html 200 OK
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Purchase Receipt</title>
+</head>
+<body>
+  <!-- Formatted purchase document -->
+</body>
+</html>
+```
+
+```json 404 Not Found
+{
+  "detail": "Compra no encontrada"
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "Emisor no configurado. Use PUT /issuer/ primero."
+}
+```
+</ResponseExample>
+
+## Purchase Flow & Inventory Updates
+
+### Automatic Stock Updates
+
+When a purchase is created:
+
+1. **Product Validation**: The system validates that products exist and don't have variants (variant-parent products cannot be purchased directly)
+2. **Cost Update**: Each product's `costo_unitario` is updated to match the latest `precio_costo_unitario` from the purchase
+3. **Stock Increment**: For products with `controla_stock: true`, the `stock_actual` is increased by the purchased quantity
+4. **Stock Movement**: A `StockMovement` record is created with:
+   - `tipo`: "ENTRADA" (incoming)
+   - `motivo`: "COMPRA" (purchase)
+   - `cantidad`: Purchased quantity
+   - `balance_after`: New stock level
+   - `description`: Purchase folio reference
+
+### IVA Calculation
+
+- **FACTURA**: 19% IVA is applied to the net amount
+- **BOLETA** or **SIN_DOCUMENTO**: No IVA (iva = 0)
+
+### Transaction Safety
+
+All purchase operations are atomic:
+- If any item fails validation, the entire purchase is rolled back
+- Stock updates and purchase records are committed together
+- No partial purchases are possible
+
+### Variant Products
+
+Products that have variants (child products) cannot be purchased directly. You must purchase the specific variant. This prevents stock tracking issues with parent products.

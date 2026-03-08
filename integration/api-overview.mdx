@@ -1,0 +1,443 @@
+---
+title: "API Overview"
+description: "Overview of the Torn FastAPI backend architecture and common patterns"
+---
+
+## Introduction
+
+Torn is built on FastAPI, a modern, high-performance Python web framework. The API follows REST principles and provides comprehensive endpoints for managing electronic invoicing operations for SII Chile.
+
+## Base Information
+
+<ParamField path="Title" type="string">
+  Torn - Facturador Electrónico
+</ParamField>
+
+<ParamField path="Description" type="string">
+  Sistema de facturación electrónica para el SII de Chile
+</ParamField>
+
+<ParamField path="Version" type="string">
+  0.1.0
+</ParamField>
+
+<ParamField path="Base URL" type="string">
+  `https://api.torn.cl` (production) or `http://localhost:8000` (development)
+</ParamField>
+
+## API Architecture
+
+### Multi-Tenant Design
+
+Torn uses a multi-tenant SaaS architecture where:
+
+- **Global Level**: User authentication and tenant management
+- **Tenant Level**: Business operations (customers, products, sales, etc.)
+- **Schema Isolation**: Each tenant has a dedicated PostgreSQL schema for data isolation
+
+### Router Organization
+
+The API is organized into functional routers defined in `app/main.py:42`:
+
+```python
+# Global/SaaS Level
+app.include_router(saas.router)      # Tenant management
+app.include_router(auth.router)       # Authentication
+app.include_router(health.router)     # Health checks
+
+# Tenant-Scoped Resources
+app.include_router(customers.router)   # Customer management
+app.include_router(products.router)    # Product catalog
+app.include_router(brands.router)      # Brand management
+app.include_router(sales.router)       # Sales & invoicing
+app.include_router(inventory.router)   # Inventory tracking
+app.include_router(cash.router)        # Cash register
+app.include_router(reports.router)     # Reports generation
+app.include_router(providers.router)   # Supplier management
+app.include_router(purchases.router)   # Purchase orders
+app.include_router(stats.router)       # Statistics
+app.include_router(users.router)       # User management
+app.include_router(config.router)      # Configuration
+app.include_router(roles.router)       # Role management
+app.include_router(price_lists.router) # Price lists
+app.include_router(folios.router)      # DTE folios
+app.include_router(issuer.router)      # Issuer config
+```
+
+## Common Patterns
+
+### Request Headers
+
+All tenant-scoped endpoints require these headers:
+
+```http
+Authorization: Bearer <access_token>
+X-Tenant-Id: <tenant_id>
+Content-Type: application/json
+```
+
+<Note>
+  Global endpoints (like `/auth/login`) only require the `Authorization` header after initial login.
+</Note>
+
+### Response Format
+
+All endpoints return JSON responses. Successful responses return the requested data directly:
+
+```json
+{
+  "id": 1,
+  "name": "Example Resource",
+  "created_at": "2026-03-08T10:30:00Z"
+}
+```
+
+List endpoints return an array:
+
+```json
+[
+  {"id": 1, "name": "Resource 1"},
+  {"id": 2, "name": "Resource 2"}
+]
+```
+
+### Pagination
+
+While not universally implemented, endpoints that support pagination typically use query parameters:
+
+```http
+GET /resources?skip=0&limit=100
+```
+
+<Note>
+  Most list endpoints currently return all results. Pagination will be added to high-volume endpoints as needed.
+</Note>
+
+### Filtering
+
+Search and filter endpoints use query parameters. Example from `app/routers/customers.py:55`:
+
+```http
+GET /customers/search?q=ACME
+```
+
+Common filter patterns:
+
+- **Text search**: `?q=search_term`
+- **Date range**: `?from_date=2026-01-01&to_date=2026-03-08`
+- **Status filter**: `?is_active=true`
+
+### Sorting
+
+Results are typically sorted by a logical default field:
+
+- **Customers**: Alphabetically by `razon_social`
+- **Products**: By ID descending (newest first)
+- **Sales**: By date descending (newest first)
+
+## Standard HTTP Methods
+
+The API follows REST conventions:
+
+| Method | Purpose | Example |
+|--------|---------|----------|
+| GET | Retrieve resource(s) | `GET /customers` |
+| POST | Create new resource | `POST /customers` |
+| PUT | Update existing resource | `PUT /customers/{id}` |
+| DELETE | Delete resource | `DELETE /customers/{id}` |
+
+## Error Handling
+
+The API uses standard HTTP status codes and returns detailed error messages.
+
+### Success Codes
+
+<ParamField path="200 OK" type="status">
+  Request successful, resource returned
+</ParamField>
+
+<ParamField path="201 Created" type="status">
+  Resource successfully created
+</ParamField>
+
+<ParamField path="204 No Content" type="status">
+  Resource successfully deleted
+</ParamField>
+
+### Error Codes
+
+<ParamField path="400 Bad Request" type="status">
+  Invalid request data or parameters
+</ParamField>
+
+<ParamField path="401 Unauthorized" type="status">
+  Missing or invalid authentication token
+</ParamField>
+
+<ParamField path="403 Forbidden" type="status">
+  Authenticated but insufficient permissions
+</ParamField>
+
+<ParamField path="404 Not Found" type="status">
+  Resource does not exist
+</ParamField>
+
+<ParamField path="409 Conflict" type="status">
+  Resource conflict (e.g., duplicate RUT)
+</ParamField>
+
+<ParamField path="422 Unprocessable Entity" type="status">
+  Validation error in request body
+</ParamField>
+
+<ParamField path="500 Internal Server Error" type="status">
+  Server error
+</ParamField>
+
+### Error Response Format
+
+Errors return a consistent structure:
+
+```json
+{
+  "detail": "Error message describing what went wrong"
+}
+```
+
+Validation errors (422) provide detailed field information:
+
+```json
+{
+  "detail": [
+    {
+      "loc": ["body", "email"],
+      "msg": "field required",
+      "type": "value_error.missing"
+    }
+  ]
+}
+```
+
+### Example Error Handling
+
+From `app/routers/customers.py:32`:
+
+```python
+# 409 Conflict - Duplicate resource
+existing = db.query(Customer).filter(Customer.rut == customer.rut).first()
+if existing:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Ya existe un cliente con RUT {customer.rut}",
+    )
+```
+
+From `app/routers/customers.py:88`:
+
+```python
+# 404 Not Found - Resource doesn't exist
+customer = db.query(Customer).filter(Customer.rut == rut).first()
+if not customer:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"No se encontró un cliente con RUT {rut}",
+    )
+```
+
+## CORS Configuration
+
+The API is configured to accept requests from local development origins defined in `app/main.py:19`:
+
+```python
+allow_origins=[
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://localhost:3002",
+    "http://127.0.0.1:3002",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+```
+
+<Warning>
+  In production, configure CORS to only allow your application's domain.
+</Warning>
+
+## Resource Patterns
+
+### List Resources
+
+Retrieve all resources of a type:
+
+```http
+GET /customers
+Authorization: Bearer <token>
+X-Tenant-Id: 1
+```
+
+### Get Single Resource
+
+Retrieve a specific resource by identifier:
+
+```http
+GET /customers/{rut}
+Authorization: Bearer <token>
+X-Tenant-Id: 1
+```
+
+### Create Resource
+
+Create a new resource:
+
+```http
+POST /customers
+Authorization: Bearer <token>
+X-Tenant-Id: 1
+Content-Type: application/json
+
+{
+  "rut": "12345678-9",
+  "razon_social": "ACME Corp",
+  "email": "contact@acme.com"
+}
+```
+
+### Update Resource
+
+Update an existing resource (partial update):
+
+```http
+PUT /customers/{rut}
+Authorization: Bearer <token>
+X-Tenant-Id: 1
+Content-Type: application/json
+
+{
+  "email": "newemail@acme.com",
+  "razon_social": "ACME Corporation"
+}
+```
+
+<Note>
+  Updates are partial - only include fields you want to change.
+</Note>
+
+### Delete Resource
+
+Delete a resource:
+
+```http
+DELETE /customers/{rut}
+Authorization: Bearer <token>
+X-Tenant-Id: 1
+```
+
+Many resources use soft deletion (marked as deleted but not removed from database):
+
+```python
+# From app/routers/products.py:234
+product.is_deleted = True
+product.is_active = False
+```
+
+## Auto-Generation Features
+
+Several resources support automatic ID/code generation:
+
+### Product SKU
+
+From `app/routers/products.py:24`:
+
+```python
+def generate_sku(db: Session, prefix: str = "PROD") -> str:
+    """Genera un SKU único auto-incremental.
+    
+    Formato: PROD-00001, PROD-00002, etc.
+    """
+```
+
+If you don't provide a `codigo_interno` when creating a product, one is generated automatically.
+
+### EAN-13 Barcodes
+
+From `app/routers/products.py:49`:
+
+```python
+def generate_ean13(product_id: int) -> str:
+    """Genera un código EAN-13 para uso interno.
+    
+    Usa el prefijo GS1 '200' (reservado para uso interno/in-store).
+    Formato: 200 + 9 dígitos del ID (con padding) + 1 dígito verificador.
+    """
+```
+
+Barcodes are auto-generated after product creation if not provided.
+
+## Interactive Documentation
+
+FastAPI provides automatic interactive API documentation:
+
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+- **OpenAPI Schema**: `http://localhost:8000/openapi.json`
+
+These interfaces allow you to:
+- Explore all available endpoints
+- View request/response schemas
+- Test endpoints directly from the browser
+- See detailed validation rules
+
+## Health Check
+
+Check API availability:
+
+```http
+GET /health
+```
+
+**Response:**
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2026-03-08T10:30:00Z"
+}
+```
+
+## Root Endpoint
+
+Basic API info from `app/main.py:68`:
+
+```http
+GET /
+```
+
+**Response:**
+
+```json
+{
+  "message": "Sistema Torn Online"
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="lock" href="/integration/authentication">
+    Learn about JWT authentication and tenant access
+  </Card>
+  
+  <Card title="Customers API" icon="users" href="/api/customers">
+    Manage customer records and contacts
+  </Card>
+  
+  <Card title="Products API" icon="box" href="/api/products">
+    Create and manage product catalog
+  </Card>
+  
+  <Card title="Sales API" icon="receipt" href="/api/sales">
+    Generate invoices and sales documents
+  </Card>
+</CardGroup>

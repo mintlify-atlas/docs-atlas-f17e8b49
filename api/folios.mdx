@@ -1,0 +1,343 @@
+---
+title: Folios (CAF)
+description: Manage Chilean tax document folios (CAF) for DTE generation
+---
+
+The Folios API manages Códigos de Autorización de Folios (CAF) - authorization codes required to issue electronic tax documents (DTE) in Chile. Each document type requires its own folio range authorized by the SII (Servicio de Impuestos Internos).
+
+<Note>
+  Most folio endpoints require administrator privileges.
+</Note>
+
+## Document Types
+
+Common DTE types supported:
+
+- **33**: Factura Electrónica (Electronic Invoice)
+- **34**: Factura Exenta (Exempt Invoice)
+- **39**: Boleta Electrónica (Electronic Receipt)
+- **41**: Boleta Exenta (Exempt Receipt)
+- **52**: Guía de Despacho (Delivery Guide)
+- **56**: Nota de Débito (Debit Note)
+- **61**: Nota de Crédito (Credit Note)
+- **110-112**: Export documents
+
+## Get Folio Status
+
+<api method="GET" url="/api/folios/status" />
+
+Returns the current stock and availability of folios for each DTE type.
+
+### Response
+
+<ResponseField name="dte_type" type="integer" required>
+  DTE document type code (33, 39, 61, etc.)
+</ResponseField>
+
+<ResponseField name="available" type="integer" required>
+  Number of folios still available for use
+</ResponseField>
+
+<ResponseField name="total" type="integer" required>
+  Total number of folios in the range
+</ResponseField>
+
+<ResponseField name="latest_folio_desde" type="integer" required>
+  Starting folio number of the current CAF
+</ResponseField>
+
+<ResponseField name="latest_folio_hasta" type="integer" required>
+  Ending folio number of the current CAF
+</ResponseField>
+
+<ResponseField name="fecha_vencimiento" type="date">
+  Expiration date of the CAF (typically 6 months from authorization)
+</ResponseField>
+
+### Example
+
+```bash
+curl -X GET "https://api.torn.cl/api/folios/status" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json
+[
+  {
+    "dte_type": 33,
+    "available": 450,
+    "total": 500,
+    "latest_folio_desde": 1001,
+    "latest_folio_hasta": 1500,
+    "fecha_vencimiento": "2026-09-08"
+  },
+  {
+    "dte_type": 39,
+    "available": 2800,
+    "total": 3000,
+    "latest_folio_desde": 5001,
+    "latest_folio_hasta": 8000,
+    "fecha_vencimiento": "2026-08-15"
+  },
+  {
+    "dte_type": 61,
+    "available": 0,
+    "total": 0,
+    "latest_folio_desde": 0,
+    "latest_folio_hasta": 0,
+    "fecha_vencimiento": null
+  }
+]
+```
+</ResponseExample>
+
+<Warning>
+  When `available` reaches low levels (e.g., under 50), request new folios from the SII to avoid interrupting operations.
+</Warning>
+
+## Request Folios
+
+<api method="POST" url="/api/folios/request" />
+
+Submits a request to the SII for additional folios. This endpoint creates a pending request that will be processed asynchronously.
+
+<Note>
+  This endpoint simulates the folio request process. In production, this would integrate with SII's web services or require manual CAF upload.
+</Note>
+
+### Request Body
+
+<ParamField body="dte_type" type="integer" required>
+  DTE type to request folios for (33, 39, 61, etc.)
+</ParamField>
+
+<ParamField body="amount_requested" type="integer" required>
+  Number of folios to request (must be greater than 0)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer" required>
+  Request log identifier
+</ResponseField>
+
+<ResponseField name="dte_type" type="integer" required>
+  DTE type requested
+</ResponseField>
+
+<ResponseField name="amount_requested" type="integer" required>
+  Number of folios requested
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Request status: PENDING, COMPLETED, or ERROR
+</ResponseField>
+
+<ResponseField name="timestamp" type="datetime" required>
+  When the request was created
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST "https://api.torn.cl/api/folios/request" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dte_type": 33,
+    "amount_requested": 500
+  }'
+```
+
+<ResponseExample>
+```json
+{
+  "id": 12,
+  "dte_type": 33,
+  "amount_requested": 500,
+  "status": "PENDING",
+  "timestamp": "2026-03-08T10:30:00Z"
+}
+```
+</ResponseExample>
+
+## Request History
+
+<api method="GET" url="/api/folios/requests/history" />
+
+Returns the history of folio requests made to the SII.
+
+### Query Parameters
+
+<ParamField query="limit" type="integer" default="50">
+  Maximum number of records to return
+</ParamField>
+
+### Response
+
+Returns an array of request log objects, ordered by most recent first.
+
+### Example
+
+```bash
+curl -X GET "https://api.torn.cl/api/folios/requests/history?limit=10" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json
+[
+  {
+    "id": 12,
+    "dte_type": 33,
+    "amount_requested": 500,
+    "status": "PENDING",
+    "timestamp": "2026-03-08T10:30:00Z"
+  },
+  {
+    "id": 11,
+    "dte_type": 39,
+    "amount_requested": 1000,
+    "status": "COMPLETED",
+    "timestamp": "2026-03-05T14:20:00Z"
+  },
+  {
+    "id": 10,
+    "dte_type": 61,
+    "amount_requested": 100,
+    "status": "ERROR",
+    "timestamp": "2026-03-01T09:15:00Z"
+  }
+]
+```
+</ResponseExample>
+
+## CAF Management Workflow
+
+### 1. Monitor Folio Status
+
+Regularly check folio availability to ensure uninterrupted document issuance:
+
+```bash
+curl -X GET "https://api.torn.cl/api/folios/status" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### 2. Request New Folios
+
+When folios are running low, request additional ones:
+
+```bash
+curl -X POST "https://api.torn.cl/api/folios/request" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dte_type": 33,
+    "amount_requested": 500
+  }'
+```
+
+### 3. Track Request Status
+
+Monitor the status of your folio requests:
+
+```bash
+curl -X GET "https://api.torn.cl/api/folios/requests/history?limit=5" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### 4. Upload CAF (Manual Process)
+
+Once the SII approves your request:
+
+1. Download the CAF XML file from the SII portal
+2. Upload it to the system through the admin interface
+3. The system will parse the XML and make the folios available
+
+## Best Practices
+
+### Proactive Management
+
+- **Set Alerts**: Configure notifications when folio availability drops below 10%
+- **Buffer Stock**: Request new folios when you have 20-30% remaining
+- **Document Planning**: Estimate monthly usage and request accordingly
+
+### Request Amounts
+
+Recommended folio quantities by document type:
+
+| DTE Type | Document | Recommended Quantity |
+|----------|----------|---------------------|
+| 33 | Factura Electrónica | 500-1000 |
+| 39 | Boleta Electrónica | 1000-3000 |
+| 61 | Nota de Crédito | 100-300 |
+| 56 | Nota de Débito | 100-300 |
+
+### Expiration Management
+
+- CAF files typically expire 6 months after authorization
+- Check `fecha_vencimiento` regularly
+- Request renewal at least 2 weeks before expiration
+- Unused expired folios cannot be recovered
+
+## Error Handling
+
+### Common Issues
+
+**No Folios Available (available: 0)**
+```json
+{
+  "error": "No folios available for DTE type 33",
+  "action": "Request new folios from SII"
+}
+```
+
+**Request Validation Error**
+```json
+{
+  "detail": "amount_requested must be greater than 0"
+}
+```
+
+**CAF Expired**
+```json
+{
+  "error": "CAF expired",
+  "fecha_vencimiento": "2026-01-15",
+  "action": "Request new CAF from SII"
+}
+```
+
+## Integration Example
+
+Monitor and auto-request folios:
+
+```python
+import requests
+
+def check_and_request_folios(api_url, token, dte_type, threshold=50, request_amount=500):
+    # Check current status
+    response = requests.get(
+        f"{api_url}/api/folios/status",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    
+    folios = response.json()
+    
+    for folio in folios:
+        if folio['dte_type'] == dte_type and folio['available'] < threshold:
+            # Request new folios
+            requests.post(
+                f"{api_url}/api/folios/request",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "dte_type": dte_type,
+                    "amount_requested": request_amount
+                }
+            )
+            print(f"Requested {request_amount} new folios for DTE {dte_type}")
+```

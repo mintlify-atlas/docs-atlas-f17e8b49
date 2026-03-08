@@ -1,0 +1,382 @@
+---
+title: 'Products'
+description: 'Manage products in the catalog, including SKU generation, variants, and pricing'
+---
+
+## Overview
+
+The Products API allows you to manage your product catalog, including simple products and products with variants. The system automatically generates SKUs and EAN-13 barcodes when not provided.
+
+### Auto-Generation Features
+
+- **SKU Generation**: Automatically generates SKUs in format `PROD-00001`, `PROD-00002`, etc.
+- **EAN-13 Barcode**: Generates valid EAN-13 barcodes using the GS1 prefix `200` (reserved for internal use)
+
+---
+
+## Create Product
+
+<api method="POST" endpoint="/products/" />
+
+Creates a new product in the catalog. SKU and barcode are auto-generated if not provided.
+
+### Request Body
+
+<ParamField body="nombre" type="string" required>
+  Product name
+</ParamField>
+
+<ParamField body="codigo_interno" type="string">
+  Internal SKU code. If not provided, auto-generates in format `PROD-00001`
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Product description
+</ParamField>
+
+<ParamField body="precio_neto" type="decimal" required>
+  Net price (before tax)
+</ParamField>
+
+<ParamField body="unidad_medida" type="string" default="unidad">
+  Unit of measure (e.g., "unidad", "kg", "lt")
+</ParamField>
+
+<ParamField body="codigo_barras" type="string">
+  Barcode (EAN-13/UPC). Auto-generated if not provided
+</ParamField>
+
+<ParamField body="controla_stock" type="boolean" default={false}>
+  Whether to track inventory for this product
+</ParamField>
+
+<ParamField body="stock_actual" type="decimal" default={0}>
+  Current stock level
+</ParamField>
+
+<ParamField body="stock_minimo" type="decimal" default={0}>
+  Minimum stock threshold for reorder alerts
+</ParamField>
+
+<ParamField body="brand_id" type="integer">
+  Brand ID to associate with this product
+</ParamField>
+
+<ParamField body="tax_id" type="integer">
+  Tax ID to apply to this product
+</ParamField>
+
+<ParamField body="parent_id" type="integer">
+  Parent product ID (for variants)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer">
+  Unique product identifier
+</ResponseField>
+
+<ResponseField name="codigo_interno" type="string">
+  Internal SKU code
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  Product name
+</ResponseField>
+
+<ResponseField name="descripcion" type="string">
+  Product description
+</ResponseField>
+
+<ResponseField name="precio_neto" type="decimal">
+  Net price (before tax)
+</ResponseField>
+
+<ResponseField name="precio_bruto" type="decimal">
+  Gross price (including tax)
+</ResponseField>
+
+<ResponseField name="costo_unitario" type="decimal">
+  Unit cost for margin calculation
+</ResponseField>
+
+<ResponseField name="codigo_barras" type="string">
+  Product barcode
+</ResponseField>
+
+<ResponseField name="controla_stock" type="boolean">
+  Whether inventory is tracked
+</ResponseField>
+
+<ResponseField name="stock_actual" type="decimal">
+  Current stock level
+</ResponseField>
+
+<ResponseField name="stock_minimo" type="decimal">
+  Minimum stock threshold
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean">
+  Whether the product is active
+</ResponseField>
+
+<ResponseField name="brand" type="object">
+  Associated brand information
+</ResponseField>
+
+<ResponseField name="tax" type="object">
+  Associated tax information
+</ResponseField>
+
+<ResponseField name="variants" type="array">
+  Child product variants
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST "https://api.example.com/products/" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Laptop Dell XPS 15",
+    "descripcion": "15-inch professional laptop",
+    "precio_neto": 999990,
+    "unidad_medida": "unidad",
+    "controla_stock": true,
+    "stock_actual": 10,
+    "stock_minimo": 3,
+    "brand_id": 1,
+    "tax_id": 1
+  }'
+```
+
+---
+
+## Create Product with Variants
+
+<api method="POST" endpoint="/products/with-variants" />
+
+Creates a parent product and its variants in a single request. Useful for products with multiple sizes, colors, or configurations.
+
+### Request Body
+
+<ParamField body="nombre" type="string" required>
+  Parent product name
+</ParamField>
+
+<ParamField body="codigo_interno" type="string">
+  Parent SKU. Auto-generated if not provided
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Parent product description
+</ParamField>
+
+<ParamField body="precio_neto" type="decimal" default={0}>
+  Base price for the parent (typically 0 for variant-only products)
+</ParamField>
+
+<ParamField body="controla_stock" type="boolean" default={false}>
+  Whether variants should track inventory
+</ParamField>
+
+<ParamField body="stock_minimo" type="decimal" default={0}>
+  Minimum stock threshold for variants
+</ParamField>
+
+<ParamField body="brand_id" type="integer">
+  Brand ID for the product family
+</ParamField>
+
+<ParamField body="tax_id" type="integer">
+  Tax ID to apply to all variants
+</ParamField>
+
+<ParamField body="variants" type="array" required>
+  Array of variant objects
+  
+  <ParamField body="variants[].nombre" type="string" required>
+    Variant name (e.g., "Talla 42", "Rojo XL")
+  </ParamField>
+  
+  <ParamField body="variants[].precio_neto" type="decimal" required>
+    Variant price
+  </ParamField>
+  
+  <ParamField body="variants[].codigo_interno" type="string">
+    Variant SKU. Auto-generated as `{parent_sku}-V01`, `{parent_sku}-V02`, etc.
+  </ParamField>
+  
+  <ParamField body="variants[].codigo_barras" type="string">
+    Variant barcode. Auto-generated if not provided
+  </ParamField>
+  
+  <ParamField body="variants[].stock_actual" type="decimal" default={0}>
+    Current stock for this variant
+  </ParamField>
+</ParamField>
+
+### Example
+
+```bash
+curl -X POST "https://api.example.com/products/with-variants" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Zapatillas Running Pro",
+    "descripcion": "Professional running shoes",
+    "controla_stock": true,
+    "brand_id": 2,
+    "tax_id": 1,
+    "variants": [
+      {
+        "nombre": "Talla 39",
+        "precio_neto": 59990,
+        "stock_actual": 5
+      },
+      {
+        "nombre": "Talla 40",
+        "precio_neto": 59990,
+        "stock_actual": 8
+      },
+      {
+        "nombre": "Talla 41",
+        "precio_neto": 59990,
+        "stock_actual": 6
+      }
+    ]
+  }'
+```
+
+---
+
+## List Products
+
+<api method="GET" endpoint="/products/" />
+
+Returns all active (non-deleted) products, ordered by most recent first.
+
+### Response
+
+Returns an array of product objects with the same structure as the Create Product response.
+
+### Example
+
+```bash
+curl -X GET "https://api.example.com/products/" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+---
+
+## Get Product by SKU
+
+<api method="GET" endpoint="/products/{codigo}" />
+
+Retrieves a product by its internal SKU code.
+
+### Path Parameters
+
+<ParamField path="codigo" type="string" required>
+  The product's internal SKU code (e.g., "PROD-00001")
+</ParamField>
+
+### Response
+
+Returns a single product object.
+
+### Example
+
+```bash
+curl -X GET "https://api.example.com/products/PROD-00001" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+---
+
+## Update Product
+
+<api method="PUT" endpoint="/products/{product_id}" />
+
+Updates an existing product. All fields are optional (partial update).
+
+### Path Parameters
+
+<ParamField path="product_id" type="integer" required>
+  The product ID to update
+</ParamField>
+
+### Request Body
+
+All fields from the Create Product endpoint are available as optional parameters.
+
+<ParamField body="codigo_interno" type="string">
+  Internal SKU code (must be unique)
+</ParamField>
+
+<ParamField body="nombre" type="string">
+  Product name
+</ParamField>
+
+<ParamField body="precio_neto" type="decimal">
+  Net price
+</ParamField>
+
+<ParamField body="costo_unitario" type="decimal">
+  Unit cost
+</ParamField>
+
+<ParamField body="stock_actual" type="decimal">
+  Current stock level
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Active status
+</ParamField>
+
+### Example
+
+```bash
+curl -X PUT "https://api.example.com/products/1" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "precio_neto": 899990,
+    "stock_actual": 15
+  }'
+```
+
+---
+
+## Delete Product
+
+<api method="DELETE" endpoint="/products/{product_id}" />
+
+Performs a soft delete of the product and all its variants. The product is marked as deleted and deactivated but not removed from the database.
+
+### Path Parameters
+
+<ParamField path="product_id" type="integer" required>
+  The product ID to delete
+</ParamField>
+
+### Response
+
+Returns `204 No Content` on success.
+
+### Example
+
+```bash
+curl -X DELETE "https://api.example.com/products/1" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+---
+
+## Notes
+
+- **SKU Auto-Generation**: The system uses the highest existing numeric suffix and increments it. If `PROD-00005` exists, the next auto-generated SKU will be `PROD-00006`.
+- **EAN-13 Format**: Auto-generated barcodes use format `200{product_id:09d}{check_digit}` with a valid check digit calculation.
+- **Variants**: Parent products with variants typically don't control stock directly; stock is tracked at the variant level.
+- **Soft Deletes**: Deleted products remain in the database with `is_deleted=true` and `is_active=false`.

@@ -1,0 +1,404 @@
+---
+title: 'Providers'
+description: 'Manage supplier and vendor records'
+---
+
+## Overview
+
+The Providers API allows you to manage supplier (proveedor) records - the entities from whom you purchase products and inventory. Each provider has contact information, tax identification (RUT), and an active status.
+
+## Create Provider
+
+<api method="POST" url="/providers/">
+  Register a new provider in the system.
+</api>
+
+### Request Body
+
+<ParamField body="rut" type="string" required>
+  Tax identification number (RUT) in format '12345678-9'. Must be unique and valid.
+</ParamField>
+
+<ParamField body="razon_social" type="string" required>
+  Legal or business name of the provider.
+</ParamField>
+
+<ParamField body="giro" type="string">
+  Business activity or industry.
+</ParamField>
+
+<ParamField body="direccion" type="string">
+  Physical address.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Contact email address.
+</ParamField>
+
+<ParamField body="telefono" type="string">
+  Contact phone number.
+</ParamField>
+
+<ParamField body="ciudad" type="string">
+  City.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer">
+  Unique provider identifier.
+</ResponseField>
+
+<ResponseField name="rut" type="string">
+  Tax identification number.
+</ResponseField>
+
+<ResponseField name="razon_social" type="string">
+  Legal or business name.
+</ResponseField>
+
+<ResponseField name="giro" type="string">
+  Business activity.
+</ResponseField>
+
+<ResponseField name="direccion" type="string">
+  Physical address.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Contact email.
+</ResponseField>
+
+<ResponseField name="telefono" type="string">
+  Contact phone.
+</ResponseField>
+
+<ResponseField name="ciudad" type="string">
+  City.
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean">
+  Whether the provider is active (default: true).
+</ResponseField>
+
+<ResponseField name="created_at" type="datetime">
+  Timestamp when the provider was created.
+</ResponseField>
+
+<ResponseField name="updated_at" type="datetime">
+  Timestamp of last update.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST https://api.example.com/providers/ \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "rut": "76543210-9",
+    "razon_social": "Distribuidora Central S.A.",
+    "giro": "Importación y distribución",
+    "direccion": "Av. Industrial 2500",
+    "ciudad": "Santiago",
+    "email": "ventas@distcentral.cl",
+    "telefono": "+56 2 2987 6543"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 201 Created
+{
+  "id": 1,
+  "rut": "76543210-9",
+  "razon_social": "Distribuidora Central S.A.",
+  "giro": "Importación y distribución",
+  "direccion": "Av. Industrial 2500",
+  "ciudad": "Santiago",
+  "email": "ventas@distcentral.cl",
+  "telefono": "+56 2 2987 6543",
+  "is_active": true,
+  "created_at": "2026-03-08T10:30:00Z",
+  "updated_at": null
+}
+```
+
+```json 409 Conflict
+{
+  "detail": "Ya existe un proveedor con RUT 76543210-9"
+}
+```
+</ResponseExample>
+
+## List Providers
+
+<api method="GET" url="/providers/">
+  Retrieve all active providers.
+</api>
+
+### Response
+
+Returns an array of active provider objects. Inactive providers are excluded from the list.
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/providers/ \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+[
+  {
+    "id": 1,
+    "rut": "76543210-9",
+    "razon_social": "Distribuidora Central S.A.",
+    "giro": "Importación y distribución",
+    "direccion": "Av. Industrial 2500",
+    "ciudad": "Santiago",
+    "email": "ventas@distcentral.cl",
+    "telefono": "+56 2 2987 6543",
+    "is_active": true,
+    "created_at": "2026-03-08T10:30:00Z",
+    "updated_at": null
+  },
+  {
+    "id": 2,
+    "rut": "88776655-4",
+    "razon_social": "Mayorista del Norte Ltda.",
+    "giro": "Venta mayorista",
+    "direccion": "Los Carreras 890",
+    "ciudad": "Antofagasta",
+    "email": "contacto@mayonorte.cl",
+    "telefono": "+56 55 2234 5678",
+    "is_active": true,
+    "created_at": "2026-03-07T15:20:00Z",
+    "updated_at": null
+  }
+]
+```
+</ResponseExample>
+
+## Search Providers
+
+<api method="GET" url="/providers/search">
+  Search for active providers by RUT or business name (partial match).
+</api>
+
+### Query Parameters
+
+<ParamField query="q" type="string">
+  Search query. Matches against RUT (with or without dots/dashes) or business name. Returns up to 10 results. Only searches active providers.
+</ParamField>
+
+### Response
+
+Returns an array of matching active provider objects (maximum 10).
+
+<RequestExample>
+```bash cURL
+curl -X GET "https://api.example.com/providers/search?q=Central" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+[
+  {
+    "id": 1,
+    "rut": "76543210-9",
+    "razon_social": "Distribuidora Central S.A.",
+    "giro": "Importación y distribución",
+    "direccion": "Av. Industrial 2500",
+    "ciudad": "Santiago",
+    "email": "ventas@distcentral.cl",
+    "telefono": "+56 2 2987 6543",
+    "is_active": true,
+    "created_at": "2026-03-08T10:30:00Z",
+    "updated_at": null
+  }
+]
+```
+</ResponseExample>
+
+## Get Provider
+
+<api method="GET" url="/providers/{provider_id}">
+  Retrieve a specific provider by ID.
+</api>
+
+### Path Parameters
+
+<ParamField path="provider_id" type="integer" required>
+  Unique provider identifier.
+</ParamField>
+
+### Response
+
+Returns a single provider object.
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/providers/1 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 1,
+  "rut": "76543210-9",
+  "razon_social": "Distribuidora Central S.A.",
+  "giro": "Importación y distribución",
+  "direccion": "Av. Industrial 2500",
+  "ciudad": "Santiago",
+  "email": "ventas@distcentral.cl",
+  "telefono": "+56 2 2987 6543",
+  "is_active": true,
+  "created_at": "2026-03-08T10:30:00Z",
+  "updated_at": null
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "Proveedor no encontrado"
+}
+```
+</ResponseExample>
+
+## Update Provider
+
+<api method="PUT" url="/providers/{provider_id}">
+  Update an existing provider's information.
+</api>
+
+### Path Parameters
+
+<ParamField path="provider_id" type="integer" required>
+  Unique provider identifier.
+</ParamField>
+
+### Request Body
+
+All fields are optional. Only provided fields will be updated.
+
+<ParamField body="rut" type="string">
+  New RUT value (must be unique and valid).
+</ParamField>
+
+<ParamField body="razon_social" type="string">
+  Legal or business name.
+</ParamField>
+
+<ParamField body="giro" type="string">
+  Business activity.
+</ParamField>
+
+<ParamField body="direccion" type="string">
+  Physical address.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Contact email.
+</ParamField>
+
+<ParamField body="telefono" type="string">
+  Contact phone.
+</ParamField>
+
+<ParamField body="ciudad" type="string">
+  City.
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Active status.
+</ParamField>
+
+### Response
+
+Returns the updated provider object.
+
+<RequestExample>
+```bash cURL
+curl -X PUT https://api.example.com/providers/1 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "email": "nuevoemail@distcentral.cl",
+    "telefono": "+56 2 2987 9999"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 1,
+  "rut": "76543210-9",
+  "razon_social": "Distribuidora Central S.A.",
+  "giro": "Importación y distribución",
+  "direccion": "Av. Industrial 2500",
+  "ciudad": "Santiago",
+  "email": "nuevoemail@distcentral.cl",
+  "telefono": "+56 2 2987 9999",
+  "is_active": true,
+  "created_at": "2026-03-08T10:30:00Z",
+  "updated_at": "2026-03-08T11:45:00Z"
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "Proveedor no encontrado"
+}
+```
+</ResponseExample>
+
+## Delete Provider
+
+<api method="DELETE" url="/providers/{provider_id}">
+  Deactivate a provider (soft delete). The provider is marked as inactive rather than permanently deleted.
+</api>
+
+### Path Parameters
+
+<ParamField path="provider_id" type="integer" required>
+  Unique provider identifier.
+</ParamField>
+
+### Response
+
+Returns a confirmation message on success.
+
+<RequestExample>
+```bash cURL
+curl -X DELETE https://api.example.com/providers/1 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "detail": "Proveedor desactivado"
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "Proveedor no encontrado"
+}
+```
+</ResponseExample>
+
+## Provider Management Notes
+
+- Providers use **soft delete** - when deleted, they are marked as `is_active: false` rather than being permanently removed
+- Only active providers appear in list and search results
+- Provider records are linked to purchases, so maintaining historical data is important
+- RUT validation follows Chilean tax ID format
+- Search functionality normalizes RUT queries (removes dots and dashes) for easier lookup

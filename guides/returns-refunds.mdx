@@ -1,0 +1,623 @@
+---
+title: "Returns & Refunds"
+description: "Complete guide to processing returns, issuing credit notes, and handling refunds in Torn POS"
+---
+
+## Overview
+
+Torn implements a comprehensive **reverse logistics system** that handles product returns, generates Chilean tax credit notes (Nota de Crédito), and manages financial reconciliation. Every return is atomically processed to maintain data integrity.
+
+<Note>
+Returns in Torn generate official SII tax documents (DTE type 61 for invoices, 111 for receipts) and are fully traceable to the original sale.
+</Note>
+
+## Return Flow Architecture
+
+The return process mirrors sales but in reverse:
+
+```
+1. Validate original sale exists
+2. Validate products and quantities
+3. Restock inventory (create ENTRADA movements)
+4. Calculate refund amounts (use original prices)
+5. Assign fiscal folio for credit note
+6. Generate reference to original document
+7. Create credit note (DTE 61/111)
+8. Process refund (cash or credit balance)
+9. COMMIT or ROLLBACK
+```
+
+Source: `/app/routers/sales.py:318-473`
+
+## Creating a Return
+
+<Steps>
+
+<Step title="Locate Original Sale">
+Identify the sale to be returned by its ID:
+
+```bash
+# Get sale details
+curl -X GET https://api.torn.cl/sales/?skip=0&limit=50 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "X-Tenant-ID: 5"
+```
+
+Note the `id` and original `tipo_dte` of the sale to return.
+</Step>
+
+<Step title="Submit Return Request">
+Create the return with products and reason:
+
+```bash
+curl -X POST https://api.torn.cl/sales/return \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "X-Tenant-ID: 5" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "original_sale_id": 1523,
+    "tipo_dte": 61,
+    "sii_reason_code": 1,
+    "reason": "Producto defectuoso",
+    "items": [
+      {
+        "product_id": 15,
+        "cantidad": 2
+      }
+    ],
+    "return_method_id": 1
+  }'
+```
+
+**Parameters:**
+- `original_sale_id`: ID of the sale being returned
+- `tipo_dte`: Credit note type (61 for invoices, 111 for receipts)
+- `sii_reason_code`: SII-defined reason code (see below)
+- `reason`: Free-text explanation
+- `items`: Products and quantities to return
+- `return_method_id`: Payment method for refund (1 = cash, 5 = internal credit)
+</Step>
+
+<Step title="Receive Credit Note">
+**Response:**
+```json
+{
+  "id": 1524,
+  "folio": 45,
+  "tipo_dte": 61,
+  "fecha_emision": "2026-03-08T15:30:00Z",
+  "monto_neto": 14285.71,
+  "iva": 2714.29,
+  "monto_total": 17000.00,
+  "descripcion": "Ajuste Venta #1045: Producto defectuoso",
+  "related_sale_id": 1523,
+  "referencias": [
+    {
+      "tipo_documento": "33",
+      "folio": "1045",
+      "fecha": "2026-03-08",
+      "sii_reason_code": 1
+    }
+  ],
+  "customer": {
+    "rut": "12345678-9",
+    "razon_social": "Juan Pérez"
+  },
+  "details": [
+    {
+      "product_id": 15,
+      "cantidad": 2,
+      "precio_unitario": 7142.86,
+      "subtotal": 14285.71,
+      "product": {
+        "nombre": "Martillo Carpintero",
+        "codigo_interno": "MART-001"
+      }
+    }
+  ]
+}
+```
+</Step>
+
+<Step title="Verify Stock Restoration">
+The returned products are automatically added back to inventory:
+
+```bash
+curl -X GET https://api.torn.cl/inventory/ \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+The `stock_actual` for product #15 should have increased by 2.
+</Step>
+
+</Steps>
+
+## Credit Note Types (DTE)
+
+| Original DTE | Return DTE | Description |
+|--------------|------------|-------------|
+| 33 (Factura) | 61 (Nota de Crédito) | Standard invoice credit note |
+| 34 (Factura Exenta) | 61 (Nota de Crédito) | Tax-exempt invoice credit note |
+| 39 (Boleta) | 111 (NC Electrónica) | Receipt credit note |
+| Any | 56 (Nota de Débito) | Increase amount (not returns) |
+
+Source: Referenced in `/app/routers/sales.py:408-410`
+
+<Warning>
+Always use the correct credit note type matching the original document. Mixing types will cause SII validation failures.
+</Warning>
+
+## SII Reason Codes
+
+Chilean tax law requires specifying why a credit note is issued:
+
+| Code | Reason | When to Use |
+|------|--------|-------------|
+| 1 | Anula documento de referencia | Total cancellation |
+| 2 | Corrige monto | Price correction |
+| 3 | Corrige texto | Informational correction |
+| 4 | Devuelve productos | Product return (most common) |
+
+Source: Chilean SII specifications, implemented in `/app/routers/sales.py:426`
+
+<Tip>
+Use code **4** (Devuelve productos) for standard returns, and code **1** for voiding entire sales.
+</Tip>
+
+## Inventory Restocking
+
+Returned products are automatically restocked:
+
+```python
+if product.controla_stock:
+    # Increment stock
+    product.stock_actual += item.cantidad
+    
+    # Create audit trail
+    movement = StockMovement(
+        product_id=product.id,
+        user_id=user_id,
+        tipo="ENTRADA",
+        motivo="DEVOLUCION",
+        cantidad=item.cantidad,
+        description=f"Devolución venta f.{original_sale.folio}: {return_in.reason}"
+    )
+    stock_movements.append(movement)
+```
+
+Source: `/app/routers/sales.py:370-381`
+
+This creates an immutable `StockMovement` record with:
+- `tipo = "ENTRADA"` (stock increase)
+- `motivo = "DEVOLUCION"` (return reason)
+- Link to the credit note via `sale_id`
+
+## Price Calculation for Returns
+
+Returns use the **historical price from the original sale**, not current catalog prices:
+
+```python
+# Find original sale detail
+original_detail = db.query(SaleDetail).filter(
+    SaleDetail.sale_id == original_sale.id,
+    SaleDetail.product_id == product.id
+).first()
+
+if original_detail:
+    precio_unitario = original_detail.precio_unitario
+else:
+    # Fallback to current price if original not found
+    precio_unitario = product.precio_neto
+```
+
+Source: `/app/routers/sales.py:386-391`
+
+<Note>
+This ensures refund amounts match what the customer actually paid, even if prices have changed since the sale.
+</Note>
+
+## Refund Methods
+
+### Cash Refund
+
+Return money directly to the customer:
+
+```json
+{
+  "return_method_id": 1  // EFECTIVO
+}
+```
+
+This creates a `SalePayment` record linked to the credit note. The cash should be taken from the current cash session.
+
+<Warning>
+Ensure the cashier has an open cash session with sufficient funds to provide the refund. Consider requiring manager approval for large cash refunds.
+</Warning>
+
+### Credit to Customer Account
+
+Reduce the customer's outstanding balance:
+
+```json
+{
+  "return_method_id": 5  // CREDITO_INTERNO
+}
+```
+
+The system automatically:
+
+```python
+if method.code == "CREDITO_INTERNO":
+    customer = db.query(Customer).get(original_sale.customer_id)
+    customer.current_balance -= total  # Reduce debt
+    db.add(customer)
+```
+
+Source: `/app/routers/sales.py:454-457`
+
+<Tip>
+Use internal credit for returns when:
+- Customer wants store credit
+- Cash isn't immediately available
+- Customer has existing debt to offset
+</Tip>
+
+### Card Refund (Future Enhancement)
+
+Current implementation doesn't handle card refunds directly. For card payments:
+
+1. Process return with `CREDITO_INTERNO`
+2. Manually process card reversal through payment processor
+3. Update customer balance if needed
+
+**Recommended Enhancement:**
+
+Add integration with payment gateway APIs:
+
+```python
+if method.code == "CREDITO":
+    # Find original card payment
+    original_payment = db.query(SalePayment).filter(
+        SalePayment.sale_id == original_sale.id,
+        SalePayment.payment_method.code == "CREDITO"
+    ).first()
+    
+    # Call payment processor API
+    refund_result = payment_gateway.refund(
+        transaction_id=original_payment.transaction_code,
+        amount=total
+    )
+```
+
+## Document References
+
+Credit notes automatically reference the original document:
+
+```python
+referencias_json = [{
+    "tipo_documento": str(original_sale.tipo_dte),
+    "folio": str(original_sale.folio),
+    "fecha": original_sale.fecha_emision.strftime("%Y-%m-%d"),
+    "sii_reason_code": return_in.sii_reason_code
+}]
+```
+
+Source: `/app/routers/sales.py:422-427`
+
+This creates a formal link required by Chilean tax law, appearing in the DTE XML:
+
+```xml
+<Referencia>
+  <NroLinRef>1</NroLinRef>
+  <TpoDocRef>33</TpoDocRef>
+  <FolioRef>1045</FolioRef>
+  <FchRef>2026-03-08</FchRef>
+  <CodRef>1</CodRef>
+</Referencia>
+```
+
+## Partial Returns
+
+Return only some items from a multi-product sale:
+
+```bash
+curl -X POST https://api.torn.cl/sales/return \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "original_sale_id": 1523,
+    "tipo_dte": 61,
+    "sii_reason_code": 4,
+    "reason": "Cliente devuelve solo el taladro",
+    "items": [
+      {
+        "product_id": 42,
+        "cantidad": 1
+      }
+    ],
+    "return_method_id": 1
+  }'
+```
+
+This returns only product #42, leaving other items from the sale untouched.
+
+<Note>
+There's no validation preventing returning more quantity than originally sold. Consider adding this validation in production:
+
+```python
+if item.cantidad > original_detail.cantidad:
+    raise HTTPException(400, detail="Cannot return more than sold")
+```
+</Note>
+
+## Viewing Return History
+
+Query all credit notes:
+
+```bash
+curl -X GET "https://api.torn.cl/sales/?skip=0&limit=50" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+Filter by `tipo_dte` in your application:
+
+```javascript
+// Filter for credit notes
+const creditNotes = sales.filter(sale => 
+  sale.tipo_dte === 61 || sale.tipo_dte === 111
+);
+
+// Find returns for specific original sale
+const returns = sales.filter(sale => 
+  sale.related_sale_id === 1523
+);
+```
+
+## Return Analytics
+
+### Return Rate by Product
+
+```sql
+SELECT 
+  p.codigo_interno,
+  p.nombre,
+  SUM(CASE WHEN s.tipo_dte IN (33, 39) THEN sd.cantidad ELSE 0 END) AS vendido,
+  SUM(CASE WHEN s.tipo_dte IN (61, 111) THEN sd.cantidad ELSE 0 END) AS devuelto,
+  ROUND(
+    100.0 * SUM(CASE WHEN s.tipo_dte IN (61, 111) THEN sd.cantidad ELSE 0 END) /
+    NULLIF(SUM(CASE WHEN s.tipo_dte IN (33, 39) THEN sd.cantidad ELSE 0 END), 0),
+    2
+  ) AS tasa_devolucion_pct
+FROM products p
+JOIN sale_details sd ON sd.product_id = p.id
+JOIN sales s ON s.id = sd.sale_id
+WHERE s.fecha_emision >= NOW() - INTERVAL '90 days'
+GROUP BY p.id
+HAVING SUM(CASE WHEN s.tipo_dte IN (33, 39) THEN sd.cantidad ELSE 0 END) > 0
+ORDER BY tasa_devolucion_pct DESC;
+```
+
+### Return Reasons Analysis
+
+```sql
+SELECT 
+  s.descripcion,
+  COUNT(*) AS cantidad_devoluciones,
+  SUM(s.monto_total) AS monto_total_devuelto
+FROM sales s
+WHERE s.tipo_dte IN (61, 111)
+  AND s.fecha_emision >= NOW() - INTERVAL '30 days'
+GROUP BY s.descripcion
+ORDER BY cantidad_devoluciones DESC;
+```
+
+### Customer Return Frequency
+
+```sql
+SELECT 
+  c.rut,
+  c.razon_social,
+  COUNT(*) AS num_devoluciones,
+  SUM(s.monto_total) AS total_devuelto
+FROM customers c
+JOIN sales s ON s.customer_id = c.id
+WHERE s.tipo_dte IN (61, 111)
+  AND s.fecha_emision >= NOW() - INTERVAL '180 days'
+GROUP BY c.id
+HAVING COUNT(*) > 3
+ORDER BY num_devoluciones DESC;
+```
+
+## Permission Requirements
+
+Returns require the `can_perform_returns` permission:
+
+```python
+@router.post("/sales/return")
+def create_return(
+    return_in: ReturnCreate,
+    current_user: User = Depends(get_current_local_user)
+):
+    if not current_user.role_obj.can_perform_returns:
+        raise HTTPException(403, detail="No autorizado para devoluciones")
+```
+
+By default:
+- **ADMINISTRADOR**: ✅ Can process returns
+- **VENDEDOR**: ❌ Cannot process returns
+- **BODEGUERO**: ✅ Can process returns
+
+See the [User Roles Guide](/guides/user-roles) to modify permissions.
+
+<Warning>
+Restrict return permissions to trusted staff. Returns involve inventory changes, cash movements, and tax document generation—all high-risk operations.
+</Warning>
+
+## Return Policies
+
+### Suggested Return Window
+
+Implement time-based return eligibility:
+
+```python
+from datetime import timedelta
+
+days_since_sale = (datetime.now() - original_sale.fecha_emision).days
+
+if days_since_sale > 30:
+    raise HTTPException(
+        400, 
+        detail=f"Devolución fuera de plazo (30 días). Venta realizada hace {days_since_sale} días."
+    )
+```
+
+### Condition Requirements
+
+Add business logic for return conditions:
+
+```python
+# Example: Require manager approval for returns > $50,000
+if total > 50000 and not current_user.is_manager:
+    raise HTTPException(
+        403,
+        detail="Devoluciones sobre $50.000 requieren autorización del gerente"
+    )
+```
+
+### Receipt Requirement
+
+Validate the original sale was to this customer:
+
+```python
+if original_sale.customer_id != request.customer_id:
+    raise HTTPException(
+        400,
+        detail="La venta original pertenece a otro cliente"
+    )
+```
+
+## Exchange vs. Return
+
+For product exchanges (not pure refunds), process as two transactions:
+
+<Steps>
+
+<Step title="Process the Return">
+```bash
+curl -X POST https://api.torn.cl/sales/return \
+  -d '{
+    "original_sale_id": 1523,
+    "items": [{"product_id": 15, "cantidad": 1}],
+    "return_method_id": 5  // Credit to account
+  }'
+```
+
+Customer now has store credit.
+</Step>
+
+<Step title="Process New Sale">
+```bash
+curl -X POST https://api.torn.cl/sales/ \
+  -d '{
+    "rut_cliente": "12345678-9",
+    "items": [{"product_id": 28, "cantidad": 1}],  // Different product
+    "payments": [{"payment_method_id": 5, "amount": 8500}]  // Use credit
+  }'
+```
+
+The customer's credit balance is used for the new purchase.
+</Step>
+
+</Steps>
+
+<Tip>
+This two-transaction approach maintains clean audit trails and properly handles price differences between exchanged products.
+</Tip>
+
+## Voiding Sales vs. Returns
+
+### Void (Same Day)
+
+For mistakes caught immediately:
+- Use reason code **1** (Anula documento de referencia)
+- Return all items
+- Issue full refund
+
+```bash
+{
+  "sii_reason_code": 1,
+  "reason": "Error en emisión - venta incorrecta"
+}
+```
+
+### Return (After Delivery)
+
+For legitimate product returns:
+- Use reason code **4** (Devuelve productos)
+- May be partial
+- Customer keeps original invoice and receives credit note
+
+```bash
+{
+  "sii_reason_code": 4,
+  "reason": "Cliente no satisfecho con el producto"
+}
+```
+
+## Best Practices
+
+<Card title="Verify Product Condition" icon="check-circle">
+Before processing the return:
+1. Physically inspect returned products
+2. Verify serial numbers match (if applicable)
+3. Confirm products are resaleable
+4. Document any damage
+</Card>
+
+<Card title="Manager Approval Workflow" icon="user-shield">
+For high-value returns:
+1. Cashier initiates return request
+2. System flags for manager review
+3. Manager approves/rejects with reason
+4. Only then process the credit note
+
+Consider adding an `approval_status` field to track this.
+</Card>
+
+<Card title="Restocking Fees" icon="dollar-sign">
+For opened/used products, deduct a restocking fee:
+
+```python
+refund_amount = original_price * 0.85  # 15% restocking fee
+```
+
+Create the credit note for the reduced amount.
+</Card>
+
+<Card title="Document Everything" icon="file-lines">
+Use the `reason` field extensively:
+- Why is the return being made?
+- What is the product condition?
+- Was the customer satisfied with resolution?
+- Any special circumstances?
+
+This aids dispute resolution and trend analysis.
+</Card>
+
+<Card title="Train Staff Thoroughly" icon="graduation-cap">
+Returns involve:
+- Customer service skills
+- Tax document regulations
+- Inventory management
+- Cash handling
+- System procedures
+
+Ensure all staff with return permissions are properly trained.
+</Card>
+
+## Related Guides
+
+- [Sales Process](/guides/sales-process) - Creating the original sales
+- [Inventory Management](/guides/inventory-management) - Restocking mechanics
+- [Cash Management](/guides/cash-management) - Handling cash refunds
+- [User Roles](/guides/user-roles) - Return permission configuration

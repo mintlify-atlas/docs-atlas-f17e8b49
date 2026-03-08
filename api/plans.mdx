@@ -1,0 +1,292 @@
+---
+title: 'Plans'
+description: 'Subscription plans and resource limits for tenant organizations'
+---
+
+## Overview
+
+SaaS Plans define the subscription tiers and resource limits for tenant organizations. Each plan specifies constraints like maximum users, pricing, and feature availability. Tenants are assigned a plan which governs their resource allocation, though individual limits can be overridden on a per-tenant basis.
+
+## Plan Model
+
+Plans are stored in the `public.saas_plans` table and contain the following attributes:
+
+### Plan Schema
+
+<ResponseField name="id" type="integer">
+  Unique plan identifier
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Plan name (e.g., "Starter", "Professional", "Enterprise")
+  - Maximum length: 100 characters
+</ResponseField>
+
+<ResponseField name="description" type="text">
+  Detailed description of plan features and capabilities
+</ResponseField>
+
+<ResponseField name="price_monthly" type="decimal">
+  Monthly subscription price in local currency
+  - Precision: 10 digits total, 2 decimal places
+  - Default: 0.00
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean">
+  Whether the plan is currently available for new subscriptions
+  - Default: true
+</ResponseField>
+
+<ResponseField name="max_users" type="integer">
+  Maximum number of active users allowed for tenants on this plan
+  - Default: 3
+  - Can be overridden per tenant using `Tenant.max_users_override`
+</ResponseField>
+
+<ResponseField name="created_at" type="timestamp">
+  ISO 8601 timestamp when the plan was created
+</ResponseField>
+
+<ResponseField name="updated_at" type="timestamp">
+  ISO 8601 timestamp of the last plan update
+</ResponseField>
+
+---
+
+## Plan Limits
+
+Plans enforce resource constraints on tenant organizations. The primary limit currently implemented is user capacity, with the architecture designed to support additional limits in the future.
+
+### User Limits
+
+#### How User Limits Work
+
+1. **Plan Default**: Each plan has a `max_users` value that applies to all tenants on that plan
+2. **Tenant Override**: Individual tenants can have a custom limit via `max_users_override` field
+3. **Active Users Only**: Only users with `is_active = true` count toward the limit
+4. **Validation**: User assignment endpoints check limits before allowing new users
+
+#### Limit Priority
+
+```
+if tenant.max_users_override is not null:
+    limit = tenant.max_users_override
+else if tenant.plan exists:
+    limit = tenant.plan.max_users
+else:
+    limit = 1  # Default fallback
+```
+
+#### Example Plans
+
+<CodeGroup>
+```json Starter Plan
+{
+  "id": 1,
+  "name": "Starter",
+  "description": "Perfect for small businesses just getting started",
+  "price_monthly": 29.99,
+  "is_active": true,
+  "max_users": 3,
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z"
+}
+```
+
+```json Professional Plan
+{
+  "id": 2,
+  "name": "Professional",
+  "description": "For growing businesses with multiple team members",
+  "price_monthly": 99.99,
+  "is_active": true,
+  "max_users": 10,
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z"
+}
+```
+
+```json Enterprise Plan
+{
+  "id": 3,
+  "name": "Enterprise",
+  "description": "Unlimited users for large organizations",
+  "price_monthly": 299.99,
+  "is_active": true,
+  "max_users": 50,
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z"
+}
+```
+</CodeGroup>
+
+### Future Limit Types
+
+The plan architecture is designed to support additional resource limits:
+
+- `max_documents`: Maximum number of invoices/documents per month
+- `max_storage_gb`: Storage capacity in gigabytes
+- `max_api_calls`: API rate limiting per month
+- `max_locations`: Number of physical store locations
+- `max_pos_terminals`: Number of point-of-sale terminals
+
+These limits would be added as additional columns to the `saas_plans` table and enforced by the respective API endpoints.
+
+---
+
+## Plan Tiers and Features
+
+### Typical Plan Structure
+
+While specific plan configurations are managed in the database, typical SaaS tiers follow this pattern:
+
+<AccordionGroup>
+  <Accordion title="Starter" icon="rocket">
+    **Target**: Small businesses and startups
+    
+    **Features**:
+    - Up to 3 active users
+    - Basic DTE (electronic invoice) support
+    - Standard support
+    - Single location
+    
+    **Pricing**: Entry-level monthly fee
+  </Accordion>
+
+  <Accordion title="Professional" icon="briefcase">
+    **Target**: Growing businesses
+    
+    **Features**:
+    - Up to 10 active users
+    - Full DTE capabilities
+    - Priority support
+    - Multiple locations
+    - Advanced reporting
+    
+    **Pricing**: Mid-tier monthly fee
+  </Accordion>
+
+  <Accordion title="Enterprise" icon="building">
+    **Target**: Large organizations
+    
+    **Features**:
+    - 50+ active users (or custom limit)
+    - Complete DTE suite
+    - Dedicated support
+    - Unlimited locations
+    - Custom integrations
+    - API access
+    - SLA guarantees
+    
+    **Pricing**: Premium monthly fee
+  </Accordion>
+
+  <Accordion title="Custom" icon="sliders">
+    **Target**: Enterprise with special requirements
+    
+    **Features**:
+    - Custom user limits via override
+    - Tailored feature set
+    - White-label options
+    - Custom integrations
+    - Dedicated infrastructure
+    
+    **Pricing**: Negotiated pricing
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Plan Assignment
+
+Plans are assigned to tenants via the `plan_id` foreign key in the `tenants` table.
+
+### Setting a Plan
+
+When creating or updating a tenant:
+
+```bash
+curl -X POST https://api.torn.cl/saas/tenants \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Company",
+    "rut": "76.123.456-7",
+    "plan_id": 2
+  }'
+```
+
+### Overriding Plan Limits
+
+For custom arrangements, override the user limit:
+
+```bash
+curl -X PATCH https://api.torn.cl/saas/tenants/42 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "max_users_override": 25
+  }'
+```
+
+This tenant will now support 25 users regardless of their plan's `max_users` value.
+
+---
+
+## Database Schema
+
+The `saas_plans` table structure:
+
+```sql
+CREATE TABLE public.saas_plans (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    price_monthly NUMERIC(10, 2) DEFAULT 0,
+    is_active BOOLEAN DEFAULT true,
+    max_users INTEGER DEFAULT 3,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE
+);
+```
+
+### Relationships
+
+- **One-to-Many with Tenants**: A plan can be assigned to multiple tenants
+- **Referenced by**: `tenants.plan_id` foreign key
+- **Cascade Behavior**: Tenants can exist without a plan (plan_id is nullable)
+
+---
+
+## Plan Management
+
+<Note>
+  Currently, plan management (create, update, delete) is performed directly via database administration. Future API endpoints may be added for dynamic plan management.
+</Note>
+
+### Deactivating a Plan
+
+To prevent new subscriptions while maintaining existing ones:
+
+```sql
+UPDATE public.saas_plans 
+SET is_active = false 
+WHERE id = 1;
+```
+
+Existing tenants on the plan are unaffected.
+
+### Modifying Plan Limits
+
+To increase user capacity for all tenants on a plan:
+
+```sql
+UPDATE public.saas_plans 
+SET max_users = 5,
+    updated_at = NOW()
+WHERE id = 1;
+```
+
+<Warning>
+  Decreasing plan limits does not automatically deactivate existing users. Tenants currently over the new limit will need manual intervention or grace period handling.
+</Warning>

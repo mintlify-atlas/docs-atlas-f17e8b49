@@ -1,0 +1,151 @@
+---
+title: 'Payment Methods'
+description: 'List available payment methods for sales transactions'
+---
+
+## List Payment Methods
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.example.com/sales/payment-methods/ \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+[
+  {
+    "id": 1,
+    "code": "EFECTIVO",
+    "name": "Efectivo",
+    "is_active": true
+  },
+  {
+    "id": 2,
+    "code": "TARJETA_DEBITO",
+    "name": "Tarjeta de Débito",
+    "is_active": true
+  },
+  {
+    "id": 3,
+    "code": "TARJETA_CREDITO",
+    "name": "Tarjeta de Crédito",
+    "is_active": true
+  },
+  {
+    "id": 4,
+    "code": "TRANSFERENCIA",
+    "name": "Transferencia",
+    "is_active": true
+  },
+  {
+    "id": 5,
+    "code": "CREDITO_INTERNO",
+    "name": "Fiado / Crédito Casa",
+    "is_active": true
+  }
+]
+```
+</ResponseExample>
+
+<ResponseField name="id" type="integer">
+  Unique payment method ID (used in `payment_method_id` fields)
+</ResponseField>
+
+<ResponseField name="code" type="string">
+  Internal code for the payment method. Standard codes:
+  - `EFECTIVO`: Cash
+  - `TARJETA_DEBITO`: Debit Card
+  - `TARJETA_CREDITO`: Credit Card
+  - `TRANSFERENCIA`: Bank Transfer
+  - `CREDITO_INTERNO`: Store Credit / House Account
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name for the payment method (localized)
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean">
+  Whether the payment method is currently enabled for use
+</ResponseField>
+
+## Payment Method Details
+
+### EFECTIVO (Cash)
+Direct cash payment. Most common payment method for retail.
+
+**Characteristics:**
+- Immediate settlement
+- Tracked in cash session reconciliation
+- Used in change calculation
+- Requires open cash session
+
+### TARJETA_DEBITO (Debit Card)
+Payment via debit card through point of sale terminal.
+
+**Characteristics:**
+- Requires transaction authorization code
+- Immediate bank account deduction
+- Usually requires voucher/receipt
+
+### TARJETA_CREDITO (Credit Card)
+Payment via credit card through point of sale terminal.
+
+**Characteristics:**
+- Requires transaction authorization code
+- Deferred settlement
+- May include processing fees
+- Usually requires voucher/receipt
+
+### TRANSFERENCIA (Bank Transfer)
+Direct bank transfer from customer account.
+
+**Characteristics:**
+- Requires transaction reference/code
+- Verification may be manual
+- Common for larger purchases
+- Immediate or near-immediate confirmation
+
+### CREDITO_INTERNO (Store Credit)
+Internal credit extended by the store to the customer.
+
+**Special Behavior:**
+- When used in a sale, increases the customer's `current_balance` (debt)
+- When used in a return, decreases the customer's `current_balance` (credit)
+- No external transaction code required
+- Tracked per customer for account reconciliation
+
+<Info>
+  **Internal Credit Flow**: Using `CREDITO_INTERNO` as a payment method allows customers to purchase on credit. The amount is added to their account balance, which can be paid down later or used for returns/exchanges.
+</Info>
+
+## Usage in Sale Transactions
+
+Payment methods are referenced when creating a sale by their `id`:
+
+```json Example: Mixed Payment
+{
+  "rut_cliente": "12345678-9",
+  "items": [...],
+  "payments": [
+    {
+      "payment_method_id": 1,  // EFECTIVO
+      "amount": 50000
+    },
+    {
+      "payment_method_id": 3,  // TARJETA_CREDITO
+      "amount": 30000,
+      "transaction_code": "AUTH789456"
+    }
+  ]
+}
+```
+
+<Warning>
+  The sum of all payment amounts must equal or exceed the sale total. Overpayment in cash is typically handled as change given to the customer.
+</Warning>
+
+## Filtering Active Methods
+
+This endpoint automatically filters to return only active payment methods (`is_active = true`). Inactive methods are not available for new transactions but historical data is preserved.

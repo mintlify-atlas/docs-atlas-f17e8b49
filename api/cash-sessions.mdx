@@ -1,0 +1,380 @@
+---
+title: "Cash Sessions"
+description: "Manage cash register sessions with blind cash count system"
+---
+
+## Overview
+
+The Cash Sessions API allows you to manage cash register operations including opening sessions, closing sessions with blind cash counts (arqueos), and viewing session history.
+
+### Blind Cash Count System
+
+Torn implements a blind cash count (arqueo ciego) system:
+
+1. **Opening**: Cashier declares initial cash amount (fondo de caja)
+2. **Operations**: System tracks all cash sales during the session
+3. **Closing**: Cashier counts physical cash without seeing system calculations
+4. **Reconciliation**: System compares declared amount vs. expected amount and reports differences
+
+This approach helps detect cash handling discrepancies and ensures accountability.
+
+---
+
+## Open Cash Session
+
+<api-endpoint method="POST" path="/cash/open" />
+
+Starts a new cash register session for the current user. Registers the initial cash amount (fondo de caja).
+
+### Request Body
+
+<ParamField body="start_amount" type="number" required>
+  Initial cash amount in the register (e.g., starting fund for change)
+</ParamField>
+
+<ParamField body="user_id" type="integer" required>
+  ID of the user opening the cash session
+</ParamField>
+
+<ParamField body="force_close_previous" type="boolean" default="false">
+  If true, automatically closes any previous open session for this user. The previous session will be marked as `CLOSED_SYSTEM` with zero declared amount.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer">
+  Unique identifier for the cash session
+</ResponseField>
+
+<ResponseField name="user_id" type="integer">
+  ID of the cashier user
+</ResponseField>
+
+<ResponseField name="start_time" type="datetime">
+  Timestamp when the session was opened
+</ResponseField>
+
+<ResponseField name="end_time" type="datetime" nullable>
+  Timestamp when the session was closed (null while open)
+</ResponseField>
+
+<ResponseField name="start_amount" type="number">
+  Initial cash amount declared at opening
+</ResponseField>
+
+<ResponseField name="final_cash_system" type="number">
+  System-calculated expected cash amount (start_amount + cash sales)
+</ResponseField>
+
+<ResponseField name="final_cash_declared" type="number">
+  Cash amount declared by cashier at closing
+</ResponseField>
+
+<ResponseField name="difference" type="number">
+  Difference between declared and system amounts (declared - system). Positive = surplus, Negative = shortage
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current status: `OPEN`, `CLOSED`, or `CLOSED_SYSTEM`
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST https://api.torn.com/cash/open \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": 5,
+    "start_amount": 50000,
+    "force_close_previous": false
+  }'
+```
+
+```json Response
+{
+  "id": 42,
+  "user_id": 5,
+  "start_time": "2024-03-15T09:00:00Z",
+  "end_time": null,
+  "start_amount": 50000,
+  "final_cash_system": 0,
+  "final_cash_declared": 0,
+  "difference": 0,
+  "status": "OPEN"
+}
+```
+</RequestExample>
+
+### Error Responses
+
+<ResponseField name="409 Conflict">
+  User already has an open cash session. Use `force_close_previous: true` to close it automatically or close it manually first.
+</ResponseField>
+
+---
+
+## Get Cash Session Status
+
+<api-endpoint method="GET" path="/cash/status" />
+
+Retrieves the current status of the active cash session for the authenticated user.
+
+### Response
+
+Returns the same fields as the Open Cash Session endpoint.
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.torn.com/cash/status \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```json Response
+{
+  "id": 42,
+  "user_id": 5,
+  "start_time": "2024-03-15T09:00:00Z",
+  "end_time": null,
+  "start_amount": 50000,
+  "final_cash_system": 0,
+  "final_cash_declared": 0,
+  "difference": 0,
+  "status": "OPEN"
+}
+```
+</RequestExample>
+
+### Error Responses
+
+<ResponseField name="404 Not Found">
+  No active cash session found for the current user
+</ResponseField>
+
+---
+
+## Close Cash Session
+
+<api-endpoint method="POST" path="/cash/close" />
+
+Closes the current cash session and performs a blind cash count reconciliation (arqueo). The system calculates the expected cash amount based on sales and compares it with the cashier's declared count.
+
+### Request Body
+
+<ParamField body="final_cash_declared" type="number" required>
+  Total cash amount counted by the cashier at closing time. This should be entered **without** seeing the system's calculated amount to ensure a true blind count.
+</ParamField>
+
+### Response
+
+Returns the closed session with all calculated fields populated:
+
+<ResponseField name="id" type="integer">
+  Session identifier
+</ResponseField>
+
+<ResponseField name="user_id" type="integer">
+  Cashier user ID
+</ResponseField>
+
+<ResponseField name="start_time" type="datetime">
+  Session start timestamp
+</ResponseField>
+
+<ResponseField name="end_time" type="datetime">
+  Session end timestamp
+</ResponseField>
+
+<ResponseField name="start_amount" type="number">
+  Initial cash amount
+</ResponseField>
+
+<ResponseField name="final_cash_system" type="number">
+  Expected cash amount calculated by system: `start_amount + total_cash_sales`
+</ResponseField>
+
+<ResponseField name="final_cash_declared" type="number">
+  Cash amount declared by cashier
+</ResponseField>
+
+<ResponseField name="difference" type="number">
+  Discrepancy amount: `final_cash_declared - final_cash_system`
+  
+  - **Positive value**: Cash surplus (more than expected)
+  - **Negative value**: Cash shortage (less than expected)
+  - **Zero**: Perfect match
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Session status: `CLOSED`
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST https://api.torn.com/cash/close \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "final_cash_declared": 245800
+  }'
+```
+
+```json Response
+{
+  "id": 42,
+  "user_id": 5,
+  "start_time": "2024-03-15T09:00:00Z",
+  "end_time": "2024-03-15T18:00:00Z",
+  "start_amount": 50000,
+  "final_cash_system": 246000,
+  "final_cash_declared": 245800,
+  "difference": -200,
+  "status": "CLOSED"
+}
+```
+</RequestExample>
+
+<Note>
+  In this example, there's a shortage of $200 (negative difference), meaning the cashier counted $200 less than the system expected.
+</Note>
+
+### Calculation Details
+
+The system calculates `final_cash_system` as follows:
+
+```
+final_cash_system = start_amount + sum(cash_sales_during_session)
+```
+
+Where `cash_sales_during_session` includes all sale payments with payment method code `EFECTIVO` (cash) created by the cashier after the session start time.
+
+### Error Responses
+
+<ResponseField name="404 Not Found">
+  No active cash session found for the current user
+</ResponseField>
+
+---
+
+## List Cash Sessions
+
+<api-endpoint method="GET" path="/cash/sessions" />
+
+Retrieves the complete history of all cash sessions with user information, ordered by most recent first.
+
+### Response
+
+Returns an array of session objects with embedded user information:
+
+<ResponseField name="sessions" type="array">
+  Array of cash session objects with the following fields:
+  
+  <ResponseField name="id" type="integer">
+    Session identifier
+  </ResponseField>
+  
+  <ResponseField name="user_id" type="integer">
+    Cashier user ID
+  </ResponseField>
+  
+  <ResponseField name="user" type="object">
+    Embedded user object with fields: `id`, `name`, `email`, `rut`, `role`, `is_active`, `is_owner`
+  </ResponseField>
+  
+  <ResponseField name="start_time" type="datetime">
+    Session start timestamp
+  </ResponseField>
+  
+  <ResponseField name="end_time" type="datetime" nullable>
+    Session end timestamp (null if still open)
+  </ResponseField>
+  
+  <ResponseField name="start_amount" type="number">
+    Initial cash amount
+  </ResponseField>
+  
+  <ResponseField name="final_cash_system" type="number">
+    System-calculated expected amount
+  </ResponseField>
+  
+  <ResponseField name="final_cash_declared" type="number">
+    Cashier-declared amount
+  </ResponseField>
+  
+  <ResponseField name="difference" type="number">
+    Discrepancy (declared - system)
+  </ResponseField>
+  
+  <ResponseField name="status" type="string">
+    Status: `OPEN`, `CLOSED`, or `CLOSED_SYSTEM`
+  </ResponseField>
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.torn.com/cash/sessions \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```json Response
+[
+  {
+    "id": 42,
+    "user_id": 5,
+    "user": {
+      "id": 5,
+      "name": "Maria Rodriguez",
+      "email": "maria@example.com",
+      "rut": "12345678-9",
+      "role": "Cajero",
+      "is_active": true,
+      "is_owner": false
+    },
+    "start_time": "2024-03-15T09:00:00Z",
+    "end_time": "2024-03-15T18:00:00Z",
+    "start_amount": 50000,
+    "final_cash_system": 246000,
+    "final_cash_declared": 245800,
+    "difference": -200,
+    "status": "CLOSED"
+  },
+  {
+    "id": 41,
+    "user_id": 5,
+    "user": {
+      "id": 5,
+      "name": "Maria Rodriguez",
+      "email": "maria@example.com",
+      "rut": "12345678-9",
+      "role": "Cajero",
+      "is_active": true,
+      "is_owner": false
+    },
+    "start_time": "2024-03-14T09:00:00Z",
+    "end_time": "2024-03-14T18:00:00Z",
+    "start_amount": 50000,
+    "final_cash_system": 234500,
+    "final_cash_declared": 234500,
+    "difference": 0,
+    "status": "CLOSED"
+  }
+]
+```
+</RequestExample>
+
+---
+
+## Best Practices
+
+<Tip>
+  **Blind Count Process**: To maintain the integrity of the blind cash count:
+  
+  1. Cashier opens the session and declares starting cash
+  2. Throughout the day, all sales are recorded in the system
+  3. At closing time, the cashier counts physical cash **without** checking the system
+  4. Only after entering the declared amount should the cashier see the comparison
+  5. Any discrepancies should be investigated and documented
+</Tip>
+
+<Warning>
+  **One Session Per User**: Each user can only have one open cash session at a time. Attempting to open a second session will fail unless you use `force_close_previous: true` or manually close the existing session.
+</Warning>

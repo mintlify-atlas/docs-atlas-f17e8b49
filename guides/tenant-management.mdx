@@ -1,0 +1,337 @@
+---
+title: "Tenant Management"
+description: "Complete guide to managing tenants in the Torn multi-tenant SaaS platform"
+---
+
+## Overview
+
+Torn uses a **tenant-per-schema** architecture where each company gets its own PostgreSQL schema for data isolation. This guide covers tenant provisioning, user management, and configuration.
+
+## Understanding the Multi-Tenant Architecture
+
+Each tenant (company) has:
+- A unique entry in the `public.tenants` table
+- An isolated PostgreSQL schema (e.g., `tenant_acme`)
+- Its own operational tables (sales, products, inventory, etc.)
+- Users linked through the `public.tenant_users` join table
+
+<Note>
+All global entities (tenants, SaaS users, plans) live in the `public` schema, while operational data is isolated per tenant schema.
+</Note>
+
+## Creating a New Tenant
+
+<Steps>
+
+<Step title="Authenticate as Superuser">
+Only superusers can create new tenants. Obtain a valid JWT token with superuser privileges.
+
+```bash
+curl -X POST https://api.torn.cl/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@torn.cl",
+    "password": "your-password"
+  }'
+```
+</Step>
+
+<Step title="Register the Tenant">
+Provision a new tenant with company information and economic activities:
+
+```bash
+curl -X POST https://api.torn.cl/saas/tenants \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "ACME Corporation",
+    "rut": "76123456-7",
+    "address": "Av. Providencia 1234",
+    "commune": "Providencia",
+    "city": "Santiago",
+    "giro": "Comercio al por menor",
+    "billing_day": 15,
+    "economic_activities": [
+      {
+        "code": "464903",
+        "name": "Venta al por menor de artículos de ferretería",
+        "category": "1ra",
+        "taxable": true
+      }
+    ]
+  }'
+```
+
+**Response:**
+```json
+{
+  "id": 5,
+  "name": "ACME Corporation",
+  "rut": "76123456-7",
+  "schema_name": "tenant_acme_76123456",
+  "is_active": true,
+  "plan_id": 1,
+  "created_at": "2026-03-08T10:30:00Z"
+}
+```
+</Step>
+
+<Step title="Verify Schema Creation">
+The provisioning process automatically:
+- Creates the PostgreSQL schema
+- Migrates all operational tables (products, sales, cash, etc.)
+- Inserts default data (roles, payment methods)
+- Creates an issuer record with the tenant's fiscal data
+</Step>
+
+</Steps>
+
+<Tip>
+The `schema_name` is auto-generated as `tenant_{sanitized_name}_{rut}` to ensure uniqueness and readability.
+</Tip>
+
+## Updating Tenant Information
+
+You can update tenant details including DTE (tax document) configuration:
+
+```bash
+curl -X PATCH https://api.torn.cl/saas/tenants/5 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "address": "Nueva Dirección 456",
+    "commune": "Las Condes",
+    "max_users_override": 10,
+    "economic_activities": [
+      {
+        "code": "477310",
+        "name": "Venta al por menor en comercios no especializados",
+        "category": "1ra",
+        "taxable": true
+      }
+    ]
+  }'
+```
+
+<Warning>
+Updating DTE-related fields (`name`, `address`, `giro`, `economic_activities`) triggers synchronization with the tenant's local `issuers` table.
+</Warning>
+
+## Managing Tenant Users
+
+### Adding a User to a Tenant
+
+<Steps>
+
+<Step title="Check Plan Limits">
+Ensure the tenant hasn't reached their user limit. Limits are enforced based on:
+1. `tenant.max_users_override` (if set)
+2. Otherwise, `plan.max_users`
+</Step>
+
+<Step title="Assign User to Tenant">
+```bash
+curl -X POST https://api.torn.cl/saas/tenants/5/users \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "cajero@acme.cl",
+    "full_name": "Juan Pérez",
+    "password": "secure-password-123",
+    "role_name": "VENDEDOR"
+  }'
+```
+
+**What happens:**
+1. Creates a `SaaSUser` in `public.saas_users` (if doesn't exist)
+2. Links user to tenant via `public.tenant_users`
+3. Synchronizes user to tenant's local `users` table
+4. Assigns the role from the tenant's local `roles` table
+</Step>
+
+<Step title="Verify User Assignment">
+```bash
+curl -X GET https://api.torn.cl/saas/tenants/5/users \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 12,
+    "tenant_id": 5,
+    "user_id": 8,
+    "role_name": "VENDEDOR",
+    "is_active": true,
+    "user": {
+      "email": "cajero@acme.cl",
+      "full_name": "Juan Pérez"
+    }
+  }
+]
+```
+</Step>
+
+</Steps>
+
+### Updating User Roles and Status
+
+Update a user's role or deactivate them:
+
+```bash
+curl -X PATCH https://api.torn.cl/saas/tenants/5/users/8 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role_name": "ADMINISTRADOR",
+    "is_active": true,
+    "password": "new-password-456"
+  }'
+```
+
+Source: `/app/routers/saas.py:289-370`
+
+<Note>
+Changes to user data are automatically synchronized to the tenant's local schema to maintain consistency.
+</Note>
+
+## Searching Economic Activity Codes (ACTECO)
+
+Search for Chilean tax activity codes:
+
+```bash
+curl -X GET "https://api.torn.cl/saas/actecos?q=ferreteria&limit=30" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response:**
+```json
+[
+  {
+    "code": "464903",
+    "name": "Venta al por menor de artículos de ferretería, pinturas y productos de vidrio"
+  },
+  {
+    "code": "464904",
+    "name": "Venta al por menor de materiales de construcción"
+  }
+]
+```
+
+Source: `/app/routers/saas.py:20-39`
+
+## Deactivating a Tenant
+
+Soft-delete a tenant (preserves data):
+
+```bash
+curl -X DELETE https://api.torn.cl/saas/tenants/5 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+This sets `is_active = false` but **does not drop the schema**.
+
+<Warning>
+Deactivating a tenant prevents access but retains all historical data. Schema deletion requires manual database intervention.
+</Warning>
+
+## System User Injection
+
+For support and administrative purposes, inject the Torn system user:
+
+```bash
+# Single tenant
+curl -X POST https://api.torn.cl/saas/tenants/5/inject-system-user \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# All tenants
+curl -X POST https://api.torn.cl/saas/tenants/inject-system-users-all \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+This creates a special user (`soporte@torn.cl`) with admin privileges for technical support.
+
+Source: `/app/routers/saas.py:373-464`
+
+## Listing All Tenants
+
+Retrieve all registered tenants:
+
+```bash
+curl -X GET https://api.torn.cl/saas/tenants \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "name": "Demo Store",
+    "rut": "76000001-K",
+    "schema_name": "tenant_demo_76000001",
+    "is_active": true,
+    "plan_id": 1
+  },
+  {
+    "id": 2,
+    "name": "ACME Corporation",
+    "rut": "76123456-7",
+    "schema_name": "tenant_acme_76123456",
+    "is_active": true,
+    "plan_id": 2
+  }
+]
+```
+
+## Key Implementation Details
+
+### Tenant Provisioning Service
+
+The `provision_new_tenant()` function in `/app/services/tenant_service.py` handles:
+1. Schema name generation and sanitization
+2. Schema creation via raw SQL (`CREATE SCHEMA`)
+3. Table migration using Alembic metadata
+4. Default data seeding (roles, payment methods, issuer)
+5. Transaction rollback on any failure
+
+Source: Referenced in `/app/routers/saas.py:66-84`
+
+### Global vs Local User Synchronization
+
+Users exist in two places:
+- **Global**: `public.saas_users` (single source of truth for authentication)
+- **Local**: `{schema}.users` (operational context for sales, cash sessions, etc.)
+
+Changes are synchronized using raw SQL with dynamic schema names:
+
+```python
+update_issuer_sql = text(f'''
+    UPDATE "{tenant.schema_name}".users 
+    SET role = :role, role_id = :role_id 
+    WHERE email = :email
+''')
+```
+
+Source: `/app/routers/saas.py:266-282`
+
+## Best Practices
+
+<Card title="Security" icon="shield-check">
+- Always validate superuser status before tenant operations
+- Use parameterized queries to prevent SQL injection with dynamic schemas
+- Enforce plan limits at the API layer, not just the database
+</Card>
+
+<Card title="Data Integrity" icon="database">
+- Wrap provisioning in transactions with proper rollback
+- Synchronize global and local user data on every update
+- Validate economic activity codes against the ACTECO catalog
+</Card>
+
+<Card title="Performance" icon="gauge">
+- Index `schema_name` and `rut` columns for fast tenant resolution
+- Use connection pooling with schema-specific sessions
+- Limit ACTECO search results (default 30, max 100)
+</Card>

@@ -1,0 +1,226 @@
+---
+title: 'Inventory'
+description: 'Query inventory levels and stock information'
+---
+
+## Overview
+
+The Inventory API provides access to current stock levels across all products. Stock movements and the Kardex (stock movement ledger) are tracked automatically through the `StockMovement` model when products are sold, purchased, or adjusted.
+
+### Stock Movement Types
+
+The system tracks stock changes through immutable `StockMovement` records:
+
+- **ENTRADA** (Entry): Stock increases from purchases, returns, or adjustments
+- **SALIDA** (Exit): Stock decreases from sales or adjustments
+
+### Movement Reasons
+
+- **VENTA**: Sale transaction
+- **COMPRA**: Purchase from supplier
+- **AJUSTE**: Manual stock adjustment
+- **INICIAL**: Initial stock load
+- **DEVOLUCION**: Customer return
+
+---
+
+## Get Inventory
+
+<api method="GET" endpoint="/inventory/" />
+
+Returns all active products with their current stock levels. This endpoint provides a snapshot of your complete inventory.
+
+### Response
+
+Returns an array of product objects with inventory information.
+
+<ResponseField name="id" type="integer">
+  Product identifier
+</ResponseField>
+
+<ResponseField name="codigo_interno" type="string">
+  Internal SKU code
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  Product name
+</ResponseField>
+
+<ResponseField name="full_name" type="string">
+  Full product name (includes parent name for variants)
+</ResponseField>
+
+<ResponseField name="precio_neto" type="decimal">
+  Net price
+</ResponseField>
+
+<ResponseField name="controla_stock" type="boolean">
+  Whether inventory tracking is enabled for this product
+</ResponseField>
+
+<ResponseField name="stock_actual" type="decimal">
+  Current available stock quantity
+</ResponseField>
+
+<ResponseField name="stock_minimo" type="decimal">
+  Minimum stock threshold for reorder alerts
+</ResponseField>
+
+<ResponseField name="unidad_medida" type="string">
+  Unit of measure (e.g., "unidad", "kg", "lt")
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean">
+  Whether the product is active
+</ResponseField>
+
+<ResponseField name="brand" type="object">
+  Associated brand information
+</ResponseField>
+
+### Example
+
+```bash
+curl -X GET "https://api.example.com/inventory/" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Response Example
+
+```json
+[
+  {
+    "id": 1,
+    "codigo_interno": "PROD-00001",
+    "nombre": "Laptop Dell XPS 15",
+    "full_name": "Laptop Dell XPS 15",
+    "precio_neto": 999990,
+    "precio_bruto": 1189988,
+    "costo_unitario": 750000,
+    "codigo_barras": "2000000000014",
+    "controla_stock": true,
+    "stock_actual": 15,
+    "stock_minimo": 3,
+    "unidad_medida": "unidad",
+    "is_active": true,
+    "brand": {
+      "id": 1,
+      "name": "Dell"
+    },
+    "tax": {
+      "id": 1,
+      "name": "IVA 19%",
+      "rate": 0.19
+    }
+  },
+  {
+    "id": 5,
+    "codigo_interno": "PROD-00002-V01",
+    "nombre": "Talla 39",
+    "full_name": "Zapatillas Running Pro Talla 39",
+    "precio_neto": 59990,
+    "precio_bruto": 71388,
+    "costo_unitario": 35000,
+    "codigo_barras": "2000000000051",
+    "controla_stock": true,
+    "stock_actual": 5,
+    "stock_minimo": 0,
+    "unidad_medida": "unidad",
+    "is_active": true,
+    "parent_id": 4,
+    "brand": {
+      "id": 2,
+      "name": "Nike"
+    }
+  }
+]
+```
+
+---
+
+## Stock Movement Model
+
+While there's no direct API endpoint for querying stock movements, the `StockMovement` model tracks all inventory changes:
+
+### StockMovement Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | integer | Movement identifier |
+| `product_id` | integer | Product affected |
+| `user_id` | integer | User who generated the movement |
+| `tipo` | string | Movement type: `ENTRADA` or `SALIDA` |
+| `motivo` | string | Reason: `VENTA`, `COMPRA`, `AJUSTE`, `INICIAL`, `DEVOLUCION` |
+| `cantidad` | decimal | Absolute quantity moved |
+| `fecha` | datetime | Movement timestamp |
+| `balance_after` | decimal | Stock level after this movement (snapshot) |
+| `description` | string | Optional description |
+| `sale_id` | integer | Associated sale ID (if applicable) |
+
+### How Stock Movements Work
+
+1. **Automatic Creation**: Stock movements are created automatically when:
+   - A sale is completed (creates `SALIDA` with `motivo=VENTA`)
+   - A purchase is received (creates `ENTRADA` with `motivo=COMPRA`)
+   - A return is processed (creates `ENTRADA` with `motivo=DEVOLUCION`)
+   - Manual adjustments are made (creates entry with `motivo=AJUSTE`)
+
+2. **Immutable Records**: Movements are never modified or deleted, providing complete audit trail
+
+3. **Balance Snapshot**: Each movement records the resulting stock level in `balance_after`
+
+4. **Kardex**: The complete history of movements forms the Kardex, allowing reconstruction of stock history
+
+---
+
+## Stock Control Behavior
+
+### Products with `controla_stock = true`
+
+- Stock is validated before sales (prevents overselling)
+- Stock is automatically decremented on sale
+- Stock is automatically incremented on purchase or return
+- Low stock alerts can be triggered when `stock_actual < stock_minimo`
+
+### Products with `controla_stock = false`
+
+- No stock validation occurs
+- Useful for services, digital products, or items with unlimited availability
+- Stock movements may still be recorded but not enforced
+
+---
+
+## Use Cases
+
+### Check Stock Levels
+
+Use the GET `/inventory/` endpoint to:
+- Display current inventory in admin dashboard
+- Generate low stock alerts (where `stock_actual < stock_minimo`)
+- Export inventory reports
+- Monitor product availability
+
+### Stock Adjustments
+
+To manually adjust stock:
+1. Update the product's `stock_actual` via PUT `/products/{product_id}`
+2. The system should create a `StockMovement` record with `motivo=AJUSTE`
+
+### Audit Trail
+
+The `StockMovement` model provides:
+- Complete history of all stock changes
+- User accountability (who made each change)
+- Point-in-time stock reconstruction via `balance_after` snapshots
+- Reconciliation with sales and purchases
+
+---
+
+## Integration with Other Endpoints
+
+Inventory is automatically updated by:
+
+- **Sales** (`POST /sales/`): Decrements stock when sale is completed
+- **Purchases** (`POST /purchases/`): Increments stock when purchase is received
+- **Returns** (`POST /returns/`): Increments stock when items are returned
+- **Product Updates** (`PUT /products/{id}`): Manual stock adjustments

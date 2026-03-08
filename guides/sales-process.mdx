@@ -1,0 +1,426 @@
+---
+title: "Sales Process"
+description: "Complete guide to processing sales, payments, and tax documents in Torn POS"
+---
+
+## Overview
+
+The sales process in Torn is a **transactional, atomic operation** that coordinates inventory, payments, and Chilean tax document (DTE) generation. Every sale either completes fully or rolls back entirely.
+
+<Note>
+Torn follows the Chilean SII (Servicio de Impuestos Internos) standards for electronic invoicing (Factura Electrónica).
+</Note>
+
+## Sale Flow Architecture
+
+The sale creation follows this sequence:
+
+```
+1. Validate cash session is OPEN
+2. Validate customer exists
+3. Validate products (existence, stock, active status)
+4. Calculate totals (net, IVA 19%, total)
+5. Validate payment amounts
+6. Assign fiscal folio (CAF)
+7. Deduct inventory (create StockMovements)
+8. Process payments (including internal credit)
+9. Generate DTE XML
+10. COMMIT or ROLLBACK
+```
+
+Source: `/app/routers/sales.py:36-315`
+
+## Creating a Sale
+
+<Steps>
+
+<Step title="Open a Cash Session">
+Before processing sales, the cashier must open their cash register:
+
+```bash
+curl -X POST https://api.torn.cl/cash/open \
+  -H "Authorization: Bearer CASHIER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start_amount": 50000
+  }'
+```
+
+See the [Cash Management Guide](/guides/cash-management) for details.
+</Step>
+
+<Step title="Register the Sale">
+Create a sale with products and payments:
+
+```bash
+curl -X POST https://api.torn.cl/sales/ \
+  -H "Authorization: Bearer CASHIER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rut_cliente": "12345678-9",
+    "tipo_dte": 33,
+    "descripcion": "Venta de productos ferretería",
+    "items": [
+      {
+        "product_id": 15,
+        "cantidad": 2
+      },
+      {
+        "product_id": 42,
+        "cantidad": 1
+      }
+    ],
+    "payments": [
+      {
+        "payment_method_id": 1,
+        "amount": 25000
+      },
+      {
+        "payment_method_id": 3,
+        "amount": 10000,
+        "transaction_code": "VISA-1234"
+      }
+    ]
+  }'
+```
+</Step>
+
+<Step title="Receive Confirmation">
+**Response:**
+```json
+{
+  "id": 1523,
+  "folio": 1045,
+  "tipo_dte": 33,
+  "fecha_emision": "2026-03-08T14:23:15Z",
+  "monto_neto": 29411.76,
+  "iva": 5588.24,
+  "monto_total": 35000.00,
+  "customer": {
+    "rut": "12345678-9",
+    "razon_social": "Juan Pérez",
+    "email": "juan@example.com"
+  },
+  "details": [
+    {
+      "product_id": 15,
+      "cantidad": 2,
+      "precio_unitario": 8500.00,
+      "subtotal": 17000.00,
+      "product": {
+        "nombre": "Martillo Carpintero",
+        "codigo_interno": "MART-001"
+      }
+    },
+    {
+      "product_id": 42,
+      "cantidad": 1,
+      "precio_unitario": 12411.76,
+      "subtotal": 12411.76,
+      "product": {
+        "nombre": "Taladro Eléctrico",
+        "codigo_interno": "TAL-042"
+      }
+    }
+  ]
+}
+```
+</Step>
+
+</Steps>
+
+## Document Types (DTE)
+
+Torn supports multiple Chilean tax document types:
+
+| Code | Type | Description |
+|------|------|-------------|
+| 33 | Factura Electrónica | Standard invoice for B2B |
+| 34 | Factura Exenta | Tax-exempt invoice |
+| 39 | Boleta Electrónica | Receipt for retail (B2C) |
+| 56 | Nota de Débito | Debit note (increase amount) |
+| 61 | Nota de Crédito | Credit note (decrease/refund) |
+| 111 | Nota de Crédito Electrónica (Boleta) | Credit note for receipts |
+| 112 | Nota de Débito Electrónica (Boleta) | Debit note for receipts |
+
+Set `tipo_dte` in the request to specify the document type.
+
+<Warning>
+Adjustment documents (56, 61, 111, 112) **require** references to the original document. See [Returns & Refunds Guide](/guides/returns-refunds).
+</Warning>
+
+## Inventory Management During Sales
+
+### Stock Validation
+
+For products with `controla_stock = true`, the system:
+
+1. Checks if `stock_actual >= cantidad` requested
+2. Throws `409 Conflict` if insufficient
+3. Decrements `stock_actual` atomically
+
+Source: `/app/routers/sales.py:162-170`
+
+### Stock Movement (Kardex) Registration
+
+Every sale creates immutable audit records:
+
+```python
+movement = StockMovement(
+    product_id=product.id,
+    user_id=seller_id,
+    tipo="SALIDA",
+    motivo="VENTA",
+    cantidad=item.cantidad,
+    description=f"Venta en proceso"
+)
+```
+
+These movements are linked to the sale via `sale_id` for full traceability.
+
+Source: `/app/routers/sales.py:174-184`
+
+## Payment Processing
+
+### Multiple Payment Methods
+
+Torn supports split payments across multiple methods:
+
+```json
+{
+  "payments": [
+    {"payment_method_id": 1, "amount": 15000},  // Efectivo
+    {"payment_method_id": 3, "amount": 10000, "transaction_code": "VISA-5678"},  // Tarjeta
+    {"payment_method_id": 5, "amount": 5000}   // Crédito Interno
+  ]
+}
+```
+
+### Payment Validation
+
+The system enforces:
+- Total payments ≥ sale total (exact or overpayment for cash change)
+- Returns `400 Bad Request` if underpaid
+
+Source: `/app/routers/sales.py:205-212`
+
+### Internal Credit (Cuenta Corriente)
+
+When using `CREDITO_INTERNO` payment method:
+
+1. The system increases `customer.current_balance` (debt)
+2. No cash changes hands
+3. Customer can pay later or receive credits from returns
+
+```python
+if pay_method.code == "CREDITO_INTERNO":
+    customer.current_balance += payment_in.amount
+```
+
+Source: `/app/routers/sales.py:266-269`
+
+<Tip>
+Use internal credit for loyal customers or B2B clients with payment terms (NET 30, NET 60).
+</Tip>
+
+## Fiscal Folio Assignment (CAF)
+
+### What is a CAF?
+
+CAF (Código de Autorización de Folios) is a range of authorized folio numbers issued by the SII for electronic documents.
+
+### Folio Assignment Logic
+
+```python
+caf = db.query(CAF).filter(
+    CAF.tipo_documento == tipo_dte,
+    CAF.ultimo_folio_usado < CAF.folio_hasta
+).order_by(CAF.id.asc()).first()
+
+if caf:
+    nuevo_folio = caf.ultimo_folio_usado + 1
+    caf.ultimo_folio_usado = nuevo_folio
+else:
+    # Fallback to manual correlative
+    last_sale = db.query(Sale).filter(Sale.tipo_dte == tipo_dte).order_by(Sale.folio.desc()).first()
+    nuevo_folio = (last_sale.folio + 1) if last_sale else 1
+```
+
+Source: `/app/routers/sales.py:215-228`
+
+<Warning>
+If you run out of CAF folios, the system falls back to manual correlative numbering. **Always monitor CAF stock** to maintain SII compliance.
+</Warning>
+
+## DTE XML Generation
+
+The system automatically generates XML according to SII specifications:
+
+```python
+from app.services.xml_generator import render_factura_xml
+
+xml_content = render_factura_xml(sale, issuer, customer)
+
+dte = DTE(
+    sale_id=sale.id,
+    tipo_dte=tipo_dte,
+    folio=nuevo_folio,
+    xml_content=xml_content,
+    estado_sii="GENERADO"
+)
+```
+
+The XML includes:
+- Issuer identification (RUT, business name, address, ACTECO)
+- Customer details
+- Itemized products with prices and taxes
+- Payment totals and references
+- Digital signature (if CAF loaded)
+
+Source: `/app/routers/sales.py:285-295`
+
+## Listing Sales
+
+Retrieve sales with pagination:
+
+```bash
+curl -X GET "https://api.torn.cl/sales/?skip=0&limit=50" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1523,
+    "folio": 1045,
+    "tipo_dte": 33,
+    "fecha_emision": "2026-03-08T14:23:15Z",
+    "monto_total": 35000.00,
+    "customer": {
+      "rut": "12345678-9",
+      "razon_social": "Juan Pérez"
+    },
+    "details": [
+      // ... product details
+    ]
+  }
+]
+```
+
+Sales are ordered by `created_at DESC` (newest first).
+
+Source: `/app/routers/sales.py:47-67`
+
+## Printing Sales Documents
+
+Generate HTML for printing or PDF conversion:
+
+```bash
+curl -X GET https://api.torn.cl/sales/1523/pdf \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+Returns rendered HTML based on system settings:
+- **80mm thermal** (default): Compact receipt format
+- **Carta (Letter)**: Full-page invoice format
+
+The template uses Jinja2 with custom filters:
+
+```python
+_html_env.filters["clp"] = format_clp  # $35.000
+_html_env.filters["number"] = format_number  # 1.234,56
+```
+
+Source: `/app/routers/sales.py:479-539`
+
+<Tip>
+Use the HTML endpoint with a headless browser (Puppeteer, Playwright) to generate PDFs programmatically.
+</Tip>
+
+## Available Payment Methods
+
+List all active payment methods:
+
+```bash
+curl -X GET https://api.torn.cl/sales/payment-methods/ \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response:**
+```json
+[
+  {"id": 1, "code": "EFECTIVO", "name": "Efectivo", "is_active": true},
+  {"id": 2, "code": "DEBITO", "name": "Tarjeta de Débito", "is_active": true},
+  {"id": 3, "code": "CREDITO", "name": "Tarjeta de Crédito", "is_active": true},
+  {"id": 4, "code": "TRANSFERENCIA", "name": "Transferencia Bancaria", "is_active": true},
+  {"id": 5, "code": "CREDITO_INTERNO", "name": "Crédito Interno (Fiado)", "is_active": true}
+]
+```
+
+Source: `/app/routers/sales.py:39-44`
+
+## Error Handling
+
+The sales endpoint returns specific HTTP status codes:
+
+| Status | Condition |
+|--------|----------|
+| `201 Created` | Sale processed successfully |
+| `400 Bad Request` | Invalid data (underpayment, missing fields) |
+| `404 Not Found` | Customer or product doesn't exist |
+| `409 Conflict` | Cash session closed or insufficient stock |
+| `500 Internal Server Error` | DTE generation failed (triggers rollback) |
+
+Source: `/app/routers/sales.py:100-103`
+
+## Transaction Safety
+
+### Atomicity Guarantee
+
+All operations use database transactions:
+
+```python
+try:
+    # 1. Validate
+    # 2. Deduct inventory
+    # 3. Create sale
+    # 4. Register payments
+    # 5. Generate DTE
+    db.commit()
+except Exception:
+    db.rollback()
+    raise HTTPException(status_code=500, detail="Transaction failed")
+```
+
+If **any step fails** (including XML generation), the entire sale is rolled back. No partial sales, no orphaned inventory movements.
+
+Source: `/app/routers/sales.py:284-302`
+
+<Card title="Data Integrity" icon="shield-check">
+Torn guarantees that your inventory, financial records, and tax documents remain perfectly synchronized—even during system failures or network interruptions.
+</Card>
+
+## Best Practices
+
+<Card title="Cash Session Management" icon="cash-register">
+Always ensure the cashier has an open cash session before attempting sales. Implement UI guards to prevent sale attempts when session is closed.
+</Card>
+
+<Card title="Stock Monitoring" icon="boxes-stacked">
+For stock-controlled products, implement low-stock alerts in your frontend to prevent sale failures due to insufficient inventory.
+</Card>
+
+<Card title="Payment Reconciliation" icon="file-invoice-dollar">
+Store `transaction_code` for card payments to facilitate reconciliation with payment processor reports.
+</Card>
+
+<Card title="Audit Trail" icon="clipboard-list">
+Leverage the `audit_metadata` field to track which SaaS admin performed the sale when using system users for support.
+</Card>
+
+## Related Guides
+
+- [Returns & Refunds](/guides/returns-refunds) - Process credit notes and returns
+- [Cash Management](/guides/cash-management) - Open/close cash sessions
+- [Inventory Management](/guides/inventory-management) - Stock control and movements

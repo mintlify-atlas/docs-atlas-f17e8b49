@@ -1,0 +1,408 @@
+---
+title: "Statistics"
+description: "Access dashboard statistics and sales performance metrics"
+---
+
+## Overview
+
+The Statistics API provides aggregated sales data, profit margins, and product performance analytics across different time periods.
+
+<Note>
+  All endpoints in this section require admin privileges.
+</Note>
+
+---
+
+## Get Dashboard Summary
+
+<api-endpoint method="GET" path="/stats/summary" />
+
+Retrieves aggregated sales and profit margin statistics for three time periods: daily, weekly (last 7 days), and monthly (last 30 days).
+
+### Response
+
+<ResponseField name="daily" type="object">
+  Statistics for today:
+  
+  <ResponseField name="sales_total" type="number">
+    Total sales amount
+  </ResponseField>
+  
+  <ResponseField name="sales_count" type="integer">
+    Number of sales transactions
+  </ResponseField>
+  
+  <ResponseField name="margin_total" type="number">
+    Total profit margin (sum of all product margins)
+  </ResponseField>
+  
+  <ResponseField name="period" type="string">
+    Period label: `"Diario"`
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="weekly" type="object">
+  Statistics for the last 7 days (same structure as daily)
+</ResponseField>
+
+<ResponseField name="monthly" type="object">
+  Statistics for the last 30 days (same structure as daily)
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.torn.com/stats/summary \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```json Response
+{
+  "daily": {
+    "sales_total": 1547890,
+    "sales_count": 47,
+    "margin_total": 463890,
+    "period": "Diario"
+  },
+  "weekly": {
+    "sales_total": 8934250,
+    "sales_count": 287,
+    "margin_total": 2678400,
+    "period": "Semanal"
+  },
+  "monthly": {
+    "sales_total": 35847650,
+    "sales_count": 1142,
+    "margin_total": 10754295,
+    "period": "Mensual"
+  }
+}
+```
+</RequestExample>
+
+### Margin Calculation
+
+The `margin_total` is calculated using the following formula for each sold item:
+
+```
+margin = quantity × (unit_price - unit_cost)
+```
+
+This gives you the total profit (before taxes and expenses) for all products sold in the period.
+
+---
+
+## Get Top Products
+
+<api-endpoint method="GET" path="/stats/top-products" />
+
+Returns rankings of best-performing products by quantity sold and by profit margin.
+
+### Query Parameters
+
+<ParamField query="days" type="integer" default="30">
+  Number of days to look back for the analysis
+  
+  Example: `days=7` for last week's top products
+</ParamField>
+
+<ParamField query="limit" type="integer" default="5">
+  Number of top products to return in each ranking
+  
+  Example: `limit=10` for top 10 products
+</ParamField>
+
+### Response
+
+<ResponseField name="by_quantity" type="array">
+  Top products ranked by total quantity sold:
+  
+  <ResponseField name="product_id" type="integer">
+    Product identifier
+  </ResponseField>
+  
+  <ResponseField name="nombre" type="string">
+    Product name
+  </ResponseField>
+  
+  <ResponseField name="full_name" type="string">
+    Full name including parent product (for variants). Format: `"Parent Product Variant Name"` or just product name if no parent.
+  </ResponseField>
+  
+  <ResponseField name="total_qty" type="number">
+    Total quantity sold
+  </ResponseField>
+  
+  <ResponseField name="total_sales" type="number">
+    Total sales revenue from this product
+  </ResponseField>
+  
+  <ResponseField name="total_margin" type="number">
+    Total profit margin from this product
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="by_margin" type="array">
+  Top products ranked by total profit margin (same structure as by_quantity)
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X GET https://api.torn.com/stats/top-products?days=30&limit=5 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```bash Last 7 Days, Top 10
+curl -X GET "https://api.torn.com/stats/top-products?days=7&limit=10" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```json Response
+{
+  "by_quantity": [
+    {
+      "product_id": 234,
+      "nombre": "Polera Deportiva",
+      "full_name": "Polera Deportiva",
+      "total_qty": 156,
+      "total_sales": 1547200,
+      "total_margin": 624800
+    },
+    {
+      "product_id": 567,
+      "nombre": "Talla M",
+      "full_name": "Zapatillas Running Pro Talla M",
+      "total_qty": 89,
+      "total_sales": 3382000,
+      "total_margin": 1356800
+    }
+  ],
+  "by_margin": [
+    {
+      "product_id": 567,
+      "nombre": "Talla M",
+      "full_name": "Zapatillas Running Pro Talla M",
+      "total_qty": 89,
+      "total_sales": 3382000,
+      "total_margin": 1356800
+    },
+    {
+      "product_id": 234,
+      "nombre": "Polera Deportiva",
+      "full_name": "Polera Deportiva",
+      "total_qty": 156,
+      "total_sales": 1547200,
+      "total_margin": 624800
+    }
+  ]
+}
+```
+</RequestExample>
+
+<Tip>
+  **Different Rankings**: The same product may appear in different positions in the two rankings. A high-volume, low-margin product might top the quantity list but rank lower in the margin list.
+</Tip>
+
+---
+
+## Generate Period Report
+
+<api-endpoint method="GET" path="/stats/report" />
+
+Generates a detailed sales and profitability report for a specific period, breaking down performance by product.
+
+### Query Parameters
+
+<ParamField query="period" type="string" default="day">
+  Report period type. Options:
+  - `day` - Single day report
+  - `week` - Weekly report (Monday to Sunday)
+  - `month` - Monthly report (full calendar month)
+</ParamField>
+
+<ParamField query="date" type="string" default="today">
+  Reference date in `YYYY-MM-DD` format. The period will be calculated based on this date:
+  - **day**: Report for this specific date
+  - **week**: Report for the week containing this date
+  - **month**: Report for the month containing this date
+  
+  Example: `date=2024-03-15`
+</ParamField>
+
+### Response
+
+<ResponseField name="fecha" type="datetime">
+  Reference date used for the report
+</ResponseField>
+
+<ResponseField name="period" type="string">
+  Period label: `"Diario"`, `"Semanal"`, or `"Mensual"`
+</ResponseField>
+
+<ResponseField name="total_ventas" type="number">
+  Total gross sales for the entire period
+</ResponseField>
+
+<ResponseField name="total_utilidad" type="number">
+  Total profit margin for the entire period
+</ResponseField>
+
+<ResponseField name="items" type="array">
+  Detailed breakdown by product:
+  
+  <ResponseField name="product_id" type="integer">
+    Product identifier
+  </ResponseField>
+  
+  <ResponseField name="full_name" type="string">
+    Full product name (including parent if variant)
+  </ResponseField>
+  
+  <ResponseField name="cantidad" type="number">
+    Total quantity sold
+  </ResponseField>
+  
+  <ResponseField name="monto_total" type="number">
+    Total sales revenue from this product
+  </ResponseField>
+  
+  <ResponseField name="utilidad" type="number">
+    Total profit from this product (revenue - cost)
+  </ResponseField>
+</ResponseField>
+
+<RequestExample>
+```bash Daily Report
+curl -X GET "https://api.torn.com/stats/report?period=day&date=2024-03-15" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```bash Weekly Report
+curl -X GET "https://api.torn.com/stats/report?period=week&date=2024-03-15" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```bash Monthly Report
+curl -X GET "https://api.torn.com/stats/report?period=month&date=2024-03-01" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```json Response
+{
+  "fecha": "2024-03-15T00:00:00Z",
+  "period": "Diario",
+  "total_ventas": 1547890,
+  "total_utilidad": 463890,
+  "items": [
+    {
+      "product_id": 234,
+      "full_name": "Polera Deportiva",
+      "cantidad": 28,
+      "monto_total": 278000,
+      "utilidad": 112000
+    },
+    {
+      "product_id": 567,
+      "full_name": "Zapatillas Running Pro Talla M",
+      "cantidad": 12,
+      "monto_total": 456000,
+      "utilidad": 182400
+    },
+    {
+      "product_id": 891,
+      "full_name": "Short Deportivo",
+      "cantidad": 15,
+      "monto_total": 213890,
+      "utilidad": 85556
+    }
+  ]
+}
+```
+</RequestExample>
+
+---
+
+## Period Date Ranges
+
+Here's how date ranges are calculated for each period type:
+
+<CardGroup cols={3}>
+  <Card title="Daily" icon="calendar-day">
+    **Start**: 00:00:00 of the specified date
+    
+    **End**: 23:59:59 of the specified date
+  </Card>
+  
+  <Card title="Weekly" icon="calendar-week">
+    **Start**: 00:00:00 of the Monday of the week containing the specified date
+    
+    **End**: 23:59:59 of the Sunday of that week
+  </Card>
+  
+  <Card title="Monthly" icon="calendar">
+    **Start**: 00:00:00 of the 1st day of the month
+    
+    **End**: 23:59:59 of the last day of the month
+  </Card>
+</CardGroup>
+
+---
+
+## Use Cases
+
+<AccordionGroup>
+  <Accordion title="Executive Dashboard">
+    Use `/stats/summary` to display high-level KPIs on an executive dashboard:
+    - Compare daily vs. weekly vs. monthly performance
+    - Track profit margins alongside sales volume
+    - Monitor sales velocity (sales_count)
+  </Accordion>
+
+  <Accordion title="Inventory Management">
+    Use `/stats/top-products` to optimize inventory:
+    - Identify fast-moving products by quantity
+    - Find high-margin products worth promoting
+    - Adjust stock levels based on sales velocity
+  </Accordion>
+
+  <Accordion title="Product Performance Analysis">
+    Use `/stats/report` for detailed product analysis:
+    - Compare profitability across your catalog
+    - Identify underperforming products
+    - Calculate average margins by category
+    - Generate reports for accounting/management
+  </Accordion>
+
+  <Accordion title="Trend Analysis">
+    Generate reports for multiple periods to identify trends:
+    ```bash
+    # Compare last 4 weeks
+    curl "https://api.torn.com/stats/report?period=week&date=2024-02-26"
+    curl "https://api.torn.com/stats/report?period=week&date=2024-03-04"
+    curl "https://api.torn.com/stats/report?period=week&date=2024-03-11"
+    curl "https://api.torn.com/stats/report?period=week&date=2024-03-18"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Best Practices
+
+<Tip>
+  **Margin vs. Markup**: The margin calculation uses `(price - cost)`, which gives you absolute profit. To calculate margin percentage, use: `(total_margin / total_sales) × 100`
+</Tip>
+
+<Tip>
+  **Variant Products**: Products with variants show the parent name prepended to the variant name in `full_name`. Use this to group variant performance under parent products in your UI.
+</Tip>
+
+<Warning>
+  **Performance Considerations**: Generating reports for long time periods with many products can be resource-intensive. Consider:
+  - Caching historical reports (past periods won't change)
+  - Limiting the date range for real-time queries
+  - Using background jobs for large report generation
+</Warning>
+
+<Warning>
+  **Cost Data Accuracy**: Margin calculations depend on accurate `costo_unitario` (unit cost) data in your product records. Ensure costs are updated regularly, especially after receiving new inventory at different prices.
+</Warning>

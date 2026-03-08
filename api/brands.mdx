@@ -1,0 +1,199 @@
+---
+title: 'Brands'
+description: 'Manage product brands'
+---
+
+## Overview
+
+The Brands API allows you to manage brand information for your products. Brands can be associated with products to help organize and categorize your catalog.
+
+---
+
+## Create Brand
+
+<api method="POST" endpoint="/brands/" />
+
+Creates a new brand. Brand names must be unique.
+
+### Request Body
+
+<ParamField body="name" type="string" required>
+  Brand name (must be unique)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="integer">
+  Unique brand identifier
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Brand name
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST "https://api.example.com/brands/" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Dell"
+  }'
+```
+
+### Response Example
+
+```json
+{
+  "id": 1,
+  "name": "Dell"
+}
+```
+
+---
+
+## List Brands
+
+<api method="GET" endpoint="/brands/" />
+
+Returns all brands, ordered alphabetically by name.
+
+### Response
+
+Returns an array of brand objects.
+
+<ResponseField name="id" type="integer">
+  Brand identifier
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Brand name
+</ResponseField>
+
+### Example
+
+```bash
+curl -X GET "https://api.example.com/brands/" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Response Example
+
+```json
+[
+  {
+    "id": 1,
+    "name": "Dell"
+  },
+  {
+    "id": 2,
+    "name": "Nike"
+  },
+  {
+    "id": 3,
+    "name": "Samsung"
+  }
+]
+```
+
+---
+
+## Update Brand
+
+<api method="PUT" endpoint="/brands/{brand_id}" />
+
+Updates an existing brand. The new name must not conflict with existing brands.
+
+### Path Parameters
+
+<ParamField path="brand_id" type="integer" required>
+  The brand ID to update
+</ParamField>
+
+### Request Body
+
+<ParamField body="name" type="string">
+  New brand name (must be unique if changing)
+</ParamField>
+
+### Response
+
+Returns the updated brand object.
+
+<ResponseField name="id" type="integer">
+  Brand identifier
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Updated brand name
+</ResponseField>
+
+### Example
+
+```bash
+curl -X PUT "https://api.example.com/brands/1" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Dell Technologies"
+  }'
+```
+
+### Response Example
+
+```json
+{
+  "id": 1,
+  "name": "Dell Technologies"
+}
+```
+
+---
+
+## Delete Brand
+
+<api method="DELETE" endpoint="/brands/{brand_id}" />
+
+Deletes a brand. If the brand is associated with products, the operation may fail depending on database constraints.
+
+### Path Parameters
+
+<ParamField path="brand_id" type="integer" required>
+  The brand ID to delete
+</ParamField>
+
+### Response
+
+Returns `204 No Content` on success.
+
+### Example
+
+```bash
+curl -X DELETE "https://api.example.com/brands/1" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+---
+
+## Error Handling
+
+### 409 Conflict
+
+Returned when attempting to create or update a brand with a name that already exists:
+
+```json
+{
+  "detail": "Ya existe una marca con nombre 'Dell'"
+}
+```
+
+### 404 Not Found
+
+Returned when the specified brand ID doesn't exist:
+
+```json
+{
+  "detail": "Marca con ID 999 no encontrada"
+}
+```

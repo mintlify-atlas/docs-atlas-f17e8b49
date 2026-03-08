@@ -1,0 +1,94 @@
+---
+title: Introduction
+description: Multi-tenant electronic invoicing and POS system for Chilean businesses with SII compliance
+---
+
+# Welcome to Torn
+
+Torn is a complete point of sale and electronic invoicing system designed specifically for Chilean businesses. It provides multi-tenant SaaS architecture with full compliance for Chile's Servicio de Impuestos Internos (SII) electronic invoicing requirements.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get up and running in minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up your development environment
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the complete API
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/multi-tenancy">
+    Learn the fundamentals
+  </Card>
+</CardGroup>
+
+## Key Features
+
+Torn provides everything you need to run a modern retail business in Chile:
+
+### Electronic Invoicing (DTE)
+Full compliance with Chilean SII requirements for electronic tax documents. Automatically generate, sign, and submit invoices, credit notes, and other tax documents.
+
+### Point of Sale
+Complete POS system with cash session management, multiple payment methods, and real-time inventory tracking. Designed for retail environments with an intuitive touch-first interface.
+
+### Multi-Tenant Architecture
+Built from the ground up as a multi-tenant SaaS platform with schema isolation for complete data security. Each tenant gets their own isolated database schema.
+
+### Inventory Management
+Track stock movements with complete Kardex history. Support for FIFO/LIFO accounting, automatic stock adjustments, and low-stock alerts.
+
+### Customer Credit Accounts
+Native support for customer credit accounts ("fiado"). Track customer balances, payment history, and automate credit management.
+
+### Sales Returns & Refunds
+Complete reverse logistics support. Process returns, generate credit notes automatically, and restore inventory with full audit trails.
+
+## Technology Stack
+
+<CardGroup cols={2}>
+  <Card title="Backend" icon="server">
+    **FastAPI** - Modern Python web framework with automatic API documentation and type validation
+  </Card>
+  <Card title="Frontend" icon="browser">
+    **Next.js** - React framework with server-side rendering and optimized performance
+  </Card>
+  <Card title="Database" icon="database">
+    **PostgreSQL** - Reliable relational database with schema-per-tenant isolation
+  </Card>
+  <Card title="ORM" icon="table">
+    **SQLAlchemy** - Powerful Python ORM with full transaction support
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+Torn follows a clean separation of concerns:
+
+- **Backend API** (`app/`) - FastAPI application with routers, models, and services
+- **Frontend** (`frontend/`) - Next.js application with React components
+- **Multi-tenant Database** - Schema isolation per tenant for data security
+- **SII Integration** - XML generation and DTE signing for tax compliance
+
+## Who Is This For?
+
+Torn is designed for:
+
+- **Retail businesses** in Chile needing SII-compliant invoicing
+- **SaaS providers** building multi-tenant retail solutions
+- **Developers** creating custom POS systems
+- **Businesses** requiring customer credit management
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Quickstart Guide" icon="play" href="/quickstart">
+    Create your first sale
+  </Card>
+  <Card title="Multi-Tenancy" icon="users" href="/concepts/multi-tenancy">
+    Understand tenant isolation
+  </Card>
+  <Card title="Authentication" icon="lock" href="/integration/authentication">
+    Secure your API
+  </Card>
+</CardGroup>

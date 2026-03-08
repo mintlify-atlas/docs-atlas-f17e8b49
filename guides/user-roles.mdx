@@ -1,0 +1,556 @@
+---
+title: "User Roles & Permissions"
+description: "Complete guide to managing user roles, permissions, and access control in Torn POS"
+---
+
+## Overview
+
+Torn implements a **role-based access control (RBAC)** system where users are assigned roles with granular permissions. Each tenant has its own set of roles stored in their isolated schema.
+
+## Role Architecture
+
+### Role Model Structure
+
+```python
+class Role:
+    id: int
+    name: str                        # "ADMINISTRADOR", "VENDEDOR", "BODEGUERO"
+    description: str                 # Human-readable explanation
+    
+    # Granular Permissions (Boolean Flags)
+    can_manage_users: bool = False
+    can_view_reports: bool = False
+    can_edit_products: bool = True
+    can_perform_sales: bool = True
+    can_perform_returns: bool = False
+    
+    # Dynamic Permissions (JSON)
+    permissions: dict = {}           # UI/menu access, custom features
+```
+
+Source: `/app/models/user.py:10-35`
+
+### User-Role Relationship
+
+```python
+class User:
+    id: int
+    email: str
+    full_name: str
+    role_id: int                     # Foreign key to roles table
+    role: str                        # Legacy string field ("ADMIN", "SELLER")
+    role_obj: Role                   # Relationship to full role object
+```
+
+Source: `/app/models/user.py:38-89`
+
+<Note>
+The `role` string field exists for backward compatibility. New implementations should use `role_id` and `role_obj` for granular permissions.
+</Note>
+
+## Default Roles
+
+When a tenant is provisioned, these roles are seeded:
+
+| Role | Description | Default Permissions |
+|------|-------------|---------------------|
+| **ADMINISTRADOR** | Full system access | All permissions enabled |
+| **VENDEDOR** | Cashier/sales staff | Sales, products (view only), basic reports |
+| **BODEGUERO** | Warehouse manager | Products, inventory, purchases |
+| **CLIENTE** | Customer accounts | Minimal (view own orders, account balance) |
+
+Source: Referenced in tenant provisioning at `/app/services/tenant_service.py`
+
+## Listing Roles
+
+Retrieve all roles for the current tenant:
+
+```bash
+curl -X GET https://api.torn.cl/roles/ \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "X-Tenant-ID: 5"
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "name": "ADMINISTRADOR",
+    "description": "Acceso completo al sistema",
+    "can_manage_users": true,
+    "can_view_reports": true,
+    "can_edit_products": true,
+    "can_perform_sales": true,
+    "can_perform_returns": true,
+    "permissions": {
+      "dashboard": true,
+      "pos": true,
+      "inventory": true,
+      "reports": true,
+      "settings": true
+    }
+  },
+  {
+    "id": 2,
+    "name": "VENDEDOR",
+    "description": "Personal de caja y atención al cliente",
+    "can_manage_users": false,
+    "can_view_reports": false,
+    "can_edit_products": false,
+    "can_perform_sales": true,
+    "can_perform_returns": false,
+    "permissions": {
+      "dashboard": true,
+      "pos": true,
+      "inventory": false,
+      "reports": false,
+      "settings": false
+    }
+  },
+  {
+    "id": 3,
+    "name": "BODEGUERO",
+    "description": "Gestión de inventario y compras",
+    "can_manage_users": false,
+    "can_view_reports": true,
+    "can_edit_products": true,
+    "can_perform_sales": false,
+    "can_perform_returns": true,
+    "permissions": {
+      "dashboard": true,
+      "pos": false,
+      "inventory": true,
+      "reports": true,
+      "settings": false
+    }
+  }
+]
+```
+
+Source: `/app/routers/roles.py:11-14`
+
+<Warning>
+The `/roles/` endpoint requires admin privileges. Non-admin users will receive a `403 Forbidden` response.
+</Warning>
+
+## Getting Role Details
+
+Retrieve a specific role by ID:
+
+```bash
+curl -X GET https://api.torn.cl/roles/2 \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "X-Tenant-ID: 5"
+```
+
+**Response:**
+```json
+{
+  "id": 2,
+  "name": "VENDEDOR",
+  "description": "Personal de caja y atención al cliente",
+  "can_manage_users": false,
+  "can_view_reports": false,
+  "can_edit_products": false,
+  "can_perform_sales": true,
+  "can_perform_returns": false,
+  "permissions": {
+    "dashboard": true,
+    "pos": true,
+    "inventory": false,
+    "reports": false,
+    "settings": false
+  }
+}
+```
+
+Source: `/app/routers/roles.py:16-22`
+
+## Updating Role Permissions
+
+<Steps>
+
+<Step title="Identify Permission Needs">
+Determine which permissions need adjustment. For example, allowing cashiers to process returns:
+
+- `can_perform_returns: false → true`
+</Step>
+
+<Step title="Update Role Configuration">
+```bash
+curl -X PUT https://api.torn.cl/roles/2 \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "X-Tenant-ID: 5" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Personal de caja con capacidad de devoluciones",
+    "can_perform_returns": true,
+    "permissions": {
+      "dashboard": true,
+      "pos": true,
+      "returns": true,
+      "inventory": false,
+      "reports": false,
+      "settings": false
+    }
+  }'
+```
+</Step>
+
+<Step title="Verify Changes">
+**Response:**
+```json
+{
+  "id": 2,
+  "name": "VENDEDOR",
+  "description": "Personal de caja con capacidad de devoluciones",
+  "can_manage_users": false,
+  "can_view_reports": false,
+  "can_edit_products": false,
+  "can_perform_sales": true,
+  "can_perform_returns": true,
+  "permissions": {
+    "dashboard": true,
+    "pos": true,
+    "returns": true,
+    "inventory": false,
+    "reports": false,
+    "settings": false
+  }
+}
+```
+</Step>
+
+<Step title="Changes Apply Immediately">
+All users with `role_id = 2` immediately inherit the updated permissions. No logout/login required.
+</Step>
+
+</Steps>
+
+Source: `/app/routers/roles.py:24-37`
+
+<Tip>
+Use the `permissions` JSON field for UI-level controls (show/hide menus, buttons) and boolean fields for backend enforcement (API authorization).
+</Tip>
+
+## Permission Enforcement
+
+### Dependency Injection Pattern
+
+Torn uses FastAPI dependencies to enforce permissions:
+
+```python
+from app.dependencies.tenant import require_admin
+
+@router.get("/roles/", dependencies=[Depends(require_admin)])
+def list_roles(db: Session = Depends(get_tenant_db)):
+    return db.query(Role).all()
+```
+
+Source: `/app/routers/roles.py:11`
+
+### Custom Permission Checks
+
+Implement granular checks in route handlers:
+
+```python
+from fastapi import Depends, HTTPException
+from app.dependencies.tenant import get_current_local_user
+from app.models.user import User
+
+@router.post("/sales/return")
+def create_return(
+    return_in: ReturnCreate,
+    db: Session = Depends(get_tenant_db),
+    current_user: User = Depends(get_current_local_user)
+):
+    # Check permission
+    if not current_user.role_obj.can_perform_returns:
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permisos para realizar devoluciones"
+        )
+    
+    # Process return...
+```
+
+<Warning>
+Always enforce permissions at the **API layer**, not just in the frontend. Never trust client-side permission checks alone.
+</Warning>
+
+## Assigning Roles to Users
+
+### During User Creation
+
+When creating a user, specify the `role_id`:
+
+```bash
+curl -X POST https://api.torn.cl/users/ \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "X-Tenant-ID: 5" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "nuevo.vendedor@store.cl",
+    "full_name": "Carlos Ramírez",
+    "password": "secure-password-123",
+    "role_id": 2
+  }'
+```
+
+The user automatically inherits all permissions from the VENDEDOR role.
+
+### Updating User Role
+
+Promote or demote users by changing their `role_id`:
+
+```bash
+curl -X PATCH https://api.torn.cl/users/45 \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "X-Tenant-ID: 5" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role_id": 1
+  }'
+```
+
+This immediately promotes user #45 to ADMINISTRADOR with full permissions.
+
+<Note>
+Changing a user's role doesn't affect their existing sessions. Users may need to log out and back in for UI changes to reflect properly.
+</Note>
+
+## Boolean Permission Fields
+
+### Available Permission Flags
+
+| Field | Controls | Used In |
+|-------|----------|----------|
+| `can_manage_users` | Create/edit/delete users | User management endpoints |
+| `can_view_reports` | Access analytics and reports | Reports module |
+| `can_edit_products` | Modify product catalog | Product CRUD operations |
+| `can_perform_sales` | Process sales transactions | Sales endpoints |
+| `can_perform_returns` | Issue credit notes/refunds | Return endpoints |
+
+Source: `/app/models/user.py:22-26`
+
+### Recommended Permission Matrices
+
+#### ADMINISTRADOR (Admin)
+```json
+{
+  "can_manage_users": true,
+  "can_view_reports": true,
+  "can_edit_products": true,
+  "can_perform_sales": true,
+  "can_perform_returns": true
+}
+```
+
+#### VENDEDOR (Cashier)
+```json
+{
+  "can_manage_users": false,
+  "can_view_reports": false,
+  "can_edit_products": false,
+  "can_perform_sales": true,
+  "can_perform_returns": false
+}
+```
+
+#### BODEGUERO (Warehouse Manager)
+```json
+{
+  "can_manage_users": false,
+  "can_view_reports": true,
+  "can_edit_products": true,
+  "can_perform_sales": false,
+  "can_perform_returns": true
+}
+```
+
+## Dynamic Permissions (JSON Field)
+
+The `permissions` JSON field allows flexible, application-specific controls:
+
+### UI/Menu Visibility
+
+```json
+{
+  "permissions": {
+    "dashboard": true,
+    "pos": true,
+    "inventory": false,
+    "reports": false,
+    "settings": false,
+    "customers": true,
+    "providers": false
+  }
+}
+```
+
+### Feature Flags
+
+```json
+{
+  "permissions": {
+    "can_discount": true,
+    "max_discount_percent": 15,
+    "can_void_sale": false,
+    "can_override_price": false,
+    "can_view_cost_prices": false
+  }
+}
+```
+
+### Module Access
+
+```json
+{
+  "permissions": {
+    "modules": {
+      "sales": {"read": true, "write": true, "delete": false},
+      "products": {"read": true, "write": false, "delete": false},
+      "reports": {"read": false, "write": false, "delete": false}
+    }
+  }
+}
+```
+
+<Tip>
+Use the JSON field for business-specific permissions that don't warrant dedicated database columns. Keep the schema flexible.
+</Tip>
+
+## Frontend Integration
+
+Retrieve current user with role information:
+
+```bash
+curl -X GET https://api.torn.cl/auth/me \
+  -H "Authorization: Bearer USER_TOKEN" \
+  -H "X-Tenant-ID: 5"
+```
+
+**Response:**
+```json
+{
+  "id": 45,
+  "email": "cajero@store.cl",
+  "name": "Carlos Ramírez",
+  "role": "VENDEDOR",
+  "role_id": 2,
+  "is_active": true,
+  "role_obj": {
+    "id": 2,
+    "name": "VENDEDOR",
+    "can_manage_users": false,
+    "can_view_reports": false,
+    "can_edit_products": false,
+    "can_perform_sales": true,
+    "can_perform_returns": false,
+    "permissions": {
+      "dashboard": true,
+      "pos": true,
+      "inventory": false
+    }
+  }
+}
+```
+
+Use this to:
+- Show/hide UI elements
+- Enable/disable buttons
+- Filter menu items
+- Display role-appropriate dashboards
+
+## Special User Types
+
+### Owner Users
+
+```python
+class User:
+    is_owner: bool = False           # Tenant owner (highest privilege)
+```
+
+Owner users bypass most permission checks. Typically assigned to the business owner during tenant creation.
+
+### System Users
+
+```python
+class User:
+    is_system_user: bool = False     # Torn support/admin user
+```
+
+System users are injected for technical support and leave audit trails:
+
+```python
+audit_metadata = {"saas_admin_email": global_user.email}
+```
+
+Source: `/app/routers/sales.py:248`
+
+<Warning>
+System user actions should always be logged in `audit_metadata` for compliance and accountability.
+</Warning>
+
+## Role Naming Conventions
+
+Torn uses Spanish role names by default (Chilean market focus):
+
+- `ADMINISTRADOR` (Administrator)
+- `VENDEDOR` (Seller/Cashier)
+- `BODEGUERO` (Warehouse Manager)
+- `CLIENTE` (Customer)
+
+You can customize role names per tenant, but maintain consistent permission structures.
+
+## Best Practices
+
+<Card title="Principle of Least Privilege" icon="shield-halved">
+Grant users only the minimum permissions needed to perform their job. Start restrictive, add permissions as needed.
+</Card>
+
+<Card title="Regular Permission Audits" icon="clipboard-check">
+Review role assignments quarterly:
+- Remove unused roles
+- Verify permission matrices align with business needs
+- Audit users with admin privileges
+</Card>
+
+<Card title="Separation of Duties" icon="users-gear">
+Avoid assigning all permissions to a single role. For example:
+- Cashiers shouldn't manage inventory
+- Warehouse staff shouldn't process sales
+- Only admins should manage users
+</Card>
+
+<Card title="Document Custom Permissions" icon="file-contract">
+If using the JSON `permissions` field extensively, document your schema:
+
+```typescript
+// permissions.schema.ts
+interface RolePermissions {
+  dashboard: boolean;
+  pos: boolean;
+  inventory: boolean;
+  reports: boolean;
+  settings: boolean;
+  can_discount: boolean;
+  max_discount_percent?: number;
+}
+```
+</Card>
+
+<Card title="Test Permission Changes" icon="flask">
+Before updating production roles, test in a staging tenant:
+1. Clone the role configuration
+2. Test with a test user
+3. Verify API access and UI behavior
+4. Deploy to production
+</Card>
+
+## Related Guides
+
+- [Tenant Management](/guides/tenant-management) - User assignment to tenants
+- [Cash Management](/guides/cash-management) - Role requirements for cash operations
+- [Sales Process](/guides/sales-process) - Permission checks during sales

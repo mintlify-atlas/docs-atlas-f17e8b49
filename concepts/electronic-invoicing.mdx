@@ -1,0 +1,431 @@
+---
+title: Electronic Invoicing (DTE)
+description: Chilean SII compliance, XML generation, and fiscal document management
+icon: file-invoice
+---
+
+## Overview
+
+Torn implements full compliance with Chile's **Servicio de Impuestos Internos (SII)** electronic invoicing requirements. Every sale generates a **Documento Tributario Electrónico (DTE)** in XML format, digitally signed and ready for transmission to the SII.
+
+<Note>
+  Torn supports DTE types 33 (Factura), 34 (Factura Exenta), 39 (Boleta), 61 (Nota de Crédito), and 56 (Nota de Débito).
+</Note>
+
+## Document Types (DTE)
+
+Chilean tax law defines several electronic document types:
+
+<CardGroup cols={2}>
+  <Card title="DTE 33 - Factura Afecta" icon="file-invoice-dollar">
+    Standard taxable invoice. Requires customer RUT and address. Includes 19% IVA.
+  </Card>
+  
+  <Card title="DTE 39 - Boleta Electrónica" icon="receipt">
+    Retail receipt for end consumers. Can use generic RUT (66666666-6) for anonymous customers.
+  </Card>
+  
+  <Card title="DTE 61 - Nota de Crédito" icon="circle-minus">
+    Credit note for returns or corrections. Must reference the original document.
+  </Card>
+  
+  <Card title="DTE 56 - Nota de Débito" icon="circle-plus">
+    Debit note for additional charges. Also requires document reference.
+  </Card>
+</CardGroup>
+
+## Data Model
+
+### DTE Table Schema
+
+Each generated document is stored in the tenant schema:
+
+```python app/models/dte.py
+class DTE(Base):
+    """Documento Tributario Electrónico generado.
+
+    Representa un XML firmado y listo para (o ya) enviado al SII.
+    """
+    __tablename__ = "dtes"
+
+    id = Column(Integer, primary_key=True)
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
+    tipo_dte = Column(Integer, nullable=False, 
+                     comment="33=Factura, 34=Exenta, 61=NC, 56=ND")
+    folio = Column(Integer, nullable=False)
+    xml_content = Column(Text, comment="XML firmado del DTE")
+    track_id = Column(String(50), comment="Track ID del SII")
+    estado_sii = Column(String(20), default="pendiente", 
+                       comment="pendiente|enviado|aceptado|rechazado")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationship
+    sale = relationship("Sale", backref="dtes")
+```
+
+### CAF (Código de Autorización de Folios)
+
+Before issuing DTEs, you must upload a CAF file from the SII:
+
+```python app/models/dte.py
+class CAF(Base):
+    """Código de Autorización de Folios (CAF).
+
+    Almacena los rangos de folios autorizados por el SII.
+    """
+    __tablename__ = "cafs"
+
+    id = Column(Integer, primary_key=True)
+    tipo_documento = Column(Integer, unique=True, nullable=False,
+                           comment="33=Factura, 34=Exenta, 39=Boleta, 61=NC")
+    folio_desde = Column(Integer, nullable=False)
+    folio_hasta = Column(Integer, nullable=False)
+    ultimo_folio_usado = Column(Integer, default=0)
+    fecha_vencimiento = Column(Date, nullable=True)
+    xml_caf = Column(Text, nullable=False, 
+                    comment="XML del CAF entregado por el SII")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+```
+
+## Folio Assignment
+
+### Automatic Folio Increment
+
+During sale creation, Torn automatically assigns the next available folio from the CAF:
+
+```python app/routers/sales.py
+# Assign Folio (CAF según tipo de DTE)
+tipo = sale_in.tipo_dte
+caf = db.query(CAF).filter(
+    CAF.tipo_documento == tipo,
+    CAF.ultimo_folio_usado < CAF.folio_hasta,
+).order_by(CAF.id.asc()).first()
+
+if caf:
+    nuevo_folio = caf.ultimo_folio_usado + 1
+    caf.ultimo_folio_usado = nuevo_folio
+    db.add(caf)
+else:
+    # SIMULATION MODE: Use manual correlative if no CAF
+    last_sale = db.query(Sale).filter(
+        Sale.tipo_dte == tipo
+    ).order_by(Sale.folio.desc()).first()
+    nuevo_folio = (last_sale.folio + 1) if last_sale else 1
+```
+
+<Warning>
+  Without a valid CAF, Torn operates in simulation mode using internal folios. These documents cannot be sent to the SII until a CAF is uploaded.
+</Warning>
+
+### Folio Exhaustion
+
+When a CAF range is depleted:
+
+```python
+if caf.ultimo_folio_usado >= caf.folio_hasta:
+    raise HTTPException(
+        status_code=409,
+        detail=f"Folios agotados para DTE {tipo}. Solicitar nuevo CAF."
+    )
+```
+
+## XML Generation
+
+### Template-Based Rendering
+
+Torn uses Jinja2 templates to generate SII-compliant XML:
+
+```python app/services/xml_generator.py
+from jinja2 import Environment, FileSystemLoader
+from pathlib import Path
+
+_TEMPLATES_DIR = Path(__file__).parent.parent / "templates" / "xml"
+
+_env = Environment(
+    loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+    autoescape=False,  # XML, not HTML
+    trim_blocks=True,
+    lstrip_blocks=True,
+)
+
+def render_factura_xml(sale, issuer, customer) -> str:
+    """Genera el XML de un Documento Tributario Electrónico.
+
+    Utiliza una plantilla Jinja2 para estructurar los datos.
+    
+    Args:
+        sale (Sale): Objeto de venta con detalles cargados.
+        issuer (Issuer): Datos de la empresa emisora.
+        customer (User): Datos del cliente receptor.
+
+    Returns:
+        str: Contenido XML renderizado.
+    """
+    template = _env.get_template("factura_template.xml")
+    xml_str = template.render(
+        sale=sale,
+        issuer=issuer,
+        customer=customer,
+    )
+    return xml_str
+```
+
+### Integration with Sales Workflow
+
+XML generation happens atomically within the sale transaction:
+
+```python app/routers/sales.py
+try:
+    issuer = db.query(Issuer).first()
+    xml_content = render_factura_xml(new_sale, issuer, customer)
+
+    dte = DTE(
+        sale_id=new_sale.id,
+        tipo_dte=tipo,
+        folio=nuevo_folio,
+        xml_content=xml_content,
+        estado_sii="GENERADO",
+    )
+    db.add(dte)
+    db.commit()
+except Exception:
+    db.rollback()
+    raise HTTPException(
+        status_code=500,
+        detail="Error al generar el DTE. Transacción revertida."
+    )
+```
+
+<Info>
+  If XML generation fails, the **entire sale is rolled back**, ensuring no orphaned transactions exist.
+</Info>
+
+## Document References (Referencias)
+
+### Credit and Debit Notes
+
+Adjustment documents (DTE 61, 56, 111, 112) must reference the original document:
+
+```python app/routers/sales.py
+# Validate References for Adjustment DTEs
+ADJUSTMENT_DTES = [56, 61, 111, 112]
+if sale_in.tipo_dte in ADJUSTMENT_DTES:
+    if not sale_in.referencias:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Documentos de ajuste (DTE {sale_in.tipo_dte}) "
+                   f"requieren referencias al documento original."
+        )
+    
+    for ref in sale_in.referencias:
+        if not ref.tipo_documento or not ref.folio or not ref.sii_reason_code:
+            raise HTTPException(
+                status_code=400,
+                detail="Las referencias deben incluir tipo_documento, "
+                       "folio y sii_reason_code."
+            )
+```
+
+### Reference Structure
+
+Stored as JSON in the `sales.referencias` column:
+
+```json
+[
+  {
+    "tipo_documento": "33",
+    "folio": "12345",
+    "fecha": "2026-03-01",
+    "sii_reason_code": "1"
+  }
+]
+```
+
+### Automatic Reference Generation for Returns
+
+When processing a return, Torn automatically creates the reference:
+
+```python app/routers/sales.py
+# Generate reference to original document
+referencias_json = [{
+    "tipo_documento": str(original_sale.tipo_dte),
+    "folio": str(original_sale.folio),
+    "fecha": original_sale.fecha_emision.strftime("%Y-%m-%d"),
+    "sii_reason_code": return_in.sii_reason_code
+}]
+
+nc_sale = Sale(
+    customer_id=original_sale.customer_id,
+    folio=nuevo_folio,
+    tipo_dte=61,  # Nota de Crédito
+    referencias=referencias_json,
+    related_sale_id=original_sale.id
+)
+```
+
+## SII Reason Codes
+
+The SII defines specific codes for document adjustments:
+
+| Code | Meaning |
+|------|--------|
+| 1 | Corrección de texto del documento |
+| 2 | Corrección de montos |
+| 3 | Producto no entregado / Devuelto |
+| 4 | Descuento o rebaja no aplicada |
+
+<Note>
+  Use code `3` for merchandise returns, which is the most common case in Torn's return workflow.
+</Note>
+
+## Issuer Configuration
+
+### The Issuer Model
+
+Every tenant must configure their company data (the issuer) before generating DTEs:
+
+```python app/models/issuer.py
+class Issuer(Base):
+    """Datos del Emisor (la empresa).
+    
+    Esta configuración es requerida para generar DTEs válidos.
+    """
+    __tablename__ = "issuers"
+
+    id = Column(Integer, primary_key=True)
+    rut = Column(String(20), unique=True, nullable=False)
+    razon_social = Column(String(200), nullable=False)
+    giro = Column(String(200))
+    acteco = Column(String(10), comment="Actividad económica principal")
+    direccion = Column(String(300))
+    comuna = Column(String(100))
+    ciudad = Column(String(100))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+```
+
+### Auto-Initialization During Provisioning
+
+The issuer is automatically created when a tenant is provisioned:
+
+```python app/services/tenant_service.py
+# Initialize Issuer data in new schema
+primary_acteco = ""
+if economic_activities and len(economic_activities) > 0:
+    primary_acteco = economic_activities[0].get("code", "")
+
+insert_issuer_sql = text(f"""
+    INSERT INTO "{schema_name}".issuers 
+    (rut, razon_social, giro, acteco, direccion, comuna, ciudad)
+    VALUES (:rut, :razon_social, :giro, :acteco, :direccion, :comuna, :ciudad)
+""")
+connection.execute(insert_issuer_sql, {
+    "rut": rut,
+    "razon_social": tenant_name,
+    "giro": giro or "",
+    "acteco": primary_acteco,
+    "direccion": address or "",
+    "comuna": commune or "",
+    "ciudad": city or ""
+})
+```
+
+## DTE Lifecycle
+
+<Steps>
+  <Step title="Generation">
+    DTE is created with `estado_sii = "GENERADO"` during sale commit.
+  </Step>
+  
+  <Step title="Sending (External)">
+    An external service (not part of Torn core) sends the XML to the SII and updates `track_id` and `estado_sii = "ENVIADO"`.
+  </Step>
+  
+  <Step title="Verification">
+    Poll the SII API using the `track_id` to check acceptance status.
+  </Step>
+  
+  <Step title="Final State">
+    Update `estado_sii` to `"ACEPTADO"` or `"RECHAZADO"` based on SII response.
+  </Step>
+</Steps>
+
+<Warning>
+  Torn **generates** DTEs but does not handle SII transmission. You must integrate with a signing and sending service (e.g., Facele, Chilesystems, or a custom solution).
+</Warning>
+
+## XML Template Structure
+
+A simplified DTE XML structure (actual templates are in `app/templates/xml/`):
+
+```xml factura_template.xml
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<DTE version="1.0">
+  <Documento ID="{{ sale.tipo_dte }}-{{ sale.folio }}">
+    <Encabezado>
+      <IdDoc>
+        <TipoDTE>{{ sale.tipo_dte }}</TipoDTE>
+        <Folio>{{ sale.folio }}</Folio>
+        <FchEmis>{{ sale.fecha_emision.strftime('%Y-%m-%d') }}</FchEmis>
+      </IdDoc>
+      <Emisor>
+        <RUTEmisor>{{ issuer.rut }}</RUTEmisor>
+        <RznSoc>{{ issuer.razon_social }}</RznSoc>
+        <GiroEmis>{{ issuer.giro }}</GiroEmis>
+        <Acteco>{{ issuer.acteco }}</Acteco>
+        <DirOrigen>{{ issuer.direccion }}</DirOrigen>
+        <CmnaOrigen>{{ issuer.comuna }}</CmnaOrigen>
+      </Emisor>
+      <Receptor>
+        <RUTRecep>{{ customer.rut }}</RUTRecep>
+        <RznSocRecep>{{ customer.razon_social }}</RznSocRecep>
+        <DirRecep>{{ customer.direccion }}</DirRecep>
+        <CmnaRecep>{{ customer.comuna }}</CmnaRecep>
+      </Receptor>
+      <Totales>
+        <MntNeto>{{ sale.monto_neto|int }}</MntNeto>
+        <IVA>{{ sale.iva|int }}</IVA>
+        <MntTotal>{{ sale.monto_total|int }}</MntTotal>
+      </Totales>
+    </Encabezado>
+    <Detalle>
+      {% for detail in sale.details %}
+      <Item>
+        <NroLinDet>{{ loop.index }}</NroLinDet>
+        <NmbItem>{{ detail.product.nombre }}</NmbItem>
+        <QtyItem>{{ detail.cantidad }}</QtyItem>
+        <PrcItem>{{ detail.precio_unitario|int }}</PrcItem>
+        <MontoItem>{{ detail.subtotal|int }}</MontoItem>
+      </Item>
+      {% endfor %}
+    </Detalle>
+  </Documento>
+</DTE>
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Always Validate CAF" icon="shield-check">
+    Check CAF expiry (`fecha_vencimiento`) before assigning folios. Expired CAFs will be rejected by the SII.
+  </Card>
+  
+  <Card title="Store Raw XML" icon="database">
+    Always save the generated XML in the `xml_content` field for audit and re-sending purposes.
+  </Card>
+  
+  <Card title="Handle References Strictly" icon="link">
+    Credit/Debit notes without proper references will be rejected. Validate reference data before DTE generation.
+  </Card>
+  
+  <Card title="Atomic Transactions" icon="lock">
+    Never commit a sale without a DTE. If XML generation fails, roll back the entire transaction.
+  </Card>
+</CardGroup>
+
+## Related Concepts
+
+- [POS Workflow](/concepts/pos-workflow) - How DTEs integrate with sales
+- [Inventory System](/concepts/inventory-system) - Stock movements triggered by DTEs
+- [Return Processing](/api/returns) - Generating Credit Notes

@@ -1,0 +1,309 @@
+---
+title: Configuration
+description: System settings and tax management endpoints
+---
+
+The Configuration API allows you to manage system-wide settings and tax rates used throughout the platform.
+
+## Taxes
+
+Manage tax rates that can be applied to products and sales.
+
+### List Taxes
+
+<api method="GET" url="/api/config/taxes/" />
+
+Returns all tax configurations in the system.
+
+#### Response
+
+<ResponseField name="id" type="integer" required>
+  Tax unique identifier
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Tax name (e.g., "IVA", "Exento")
+</ResponseField>
+
+<ResponseField name="rate" type="decimal" required>
+  Tax rate as a decimal (e.g., 0.19 for 19%)
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean" required>
+  Whether the tax is currently active
+</ResponseField>
+
+<ResponseField name="is_default" type="boolean" required>
+  Whether this is the default tax for new products
+</ResponseField>
+
+#### Example
+
+```bash
+curl -X GET "https://api.torn.cl/api/config/taxes/" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json
+[
+  {
+    "id": 1,
+    "name": "IVA",
+    "rate": 0.19,
+    "is_active": true,
+    "is_default": true
+  },
+  {
+    "id": 2,
+    "name": "Exento",
+    "rate": 0.0,
+    "is_active": true,
+    "is_default": false
+  }
+]
+```
+</ResponseExample>
+
+### Create Tax
+
+<api method="POST" url="/api/config/taxes/" />
+
+Creates a new tax configuration.
+
+#### Request Body
+
+<ParamField body="name" type="string" required>
+  Tax name (e.g., "IVA", "Reducido")
+</ParamField>
+
+<ParamField body="rate" type="decimal" required>
+  Tax rate as a decimal. For 19%, use 0.19
+</ParamField>
+
+<ParamField body="is_active" type="boolean" default="true">
+  Whether the tax is active
+</ParamField>
+
+<ParamField body="is_default" type="boolean" default="false">
+  Whether this should be the default tax
+</ParamField>
+
+#### Response
+
+Returns the created tax object with status code 201.
+
+#### Example
+
+```bash
+curl -X POST "https://api.torn.cl/api/config/taxes/" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "IVA Reducido",
+    "rate": 0.10,
+    "is_active": true,
+    "is_default": false
+  }'
+```
+
+<ResponseExample>
+```json
+{
+  "id": 3,
+  "name": "IVA Reducido",
+  "rate": 0.10,
+  "is_active": true,
+  "is_default": false
+}
+```
+</ResponseExample>
+
+### Update Tax
+
+<api method="PUT" url="/api/config/taxes/{tax_id}" />
+
+Updates an existing tax configuration.
+
+#### Path Parameters
+
+<ParamField path="tax_id" type="integer" required>
+  ID of the tax to update
+</ParamField>
+
+#### Request Body
+
+<ParamField body="name" type="string">
+  Tax name
+</ParamField>
+
+<ParamField body="rate" type="decimal">
+  Tax rate as a decimal
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Whether the tax is active
+</ParamField>
+
+<ParamField body="is_default" type="boolean">
+  Whether this is the default tax
+</ParamField>
+
+<Note>
+  All fields are optional. Only provided fields will be updated.
+</Note>
+
+#### Response
+
+Returns the updated tax object.
+
+#### Example
+
+```bash
+curl -X PUT "https://api.torn.cl/api/config/taxes/1" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rate": 0.19,
+    "is_active": true
+  }'
+```
+
+## System Settings
+
+Manage global system configuration.
+
+### Get Settings
+
+<api method="GET" url="/api/config/settings/" />
+
+Returns the current system settings. If no settings exist, default settings are initialized.
+
+#### Response
+
+<ResponseField name="id" type="integer" required>
+  Settings identifier (always 1)
+</ResponseField>
+
+<ResponseField name="print_format" type="string" required>
+  Printer format configuration (e.g., "80mm", "58mm")
+</ResponseField>
+
+<ResponseField name="iva_default_id" type="integer">
+  Default tax (IVA) ID to apply to new products
+</ResponseField>
+
+#### Example
+
+```bash
+curl -X GET "https://api.torn.cl/api/config/settings/" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json
+{
+  "id": 1,
+  "print_format": "80mm",
+  "iva_default_id": 1
+}
+```
+</ResponseExample>
+
+### Update Settings
+
+<api method="PUT" url="/api/config/settings/" />
+
+Updates the global system configuration.
+
+#### Request Body
+
+<ParamField body="print_format" type="string">
+  Printer format. Common values: "80mm", "58mm", "A4"
+</ParamField>
+
+<ParamField body="iva_default_id" type="integer">
+  Default tax ID to apply to new products
+</ParamField>
+
+<Note>
+  All fields are optional. Only provided fields will be updated.
+</Note>
+
+#### Response
+
+Returns the updated settings object.
+
+#### Example
+
+```bash
+curl -X PUT "https://api.torn.cl/api/config/settings/" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "print_format": "58mm",
+    "iva_default_id": 1
+  }'
+```
+
+<ResponseExample>
+```json
+{
+  "id": 1,
+  "print_format": "58mm",
+  "iva_default_id": 1
+}
+```
+</ResponseExample>
+
+## Configuration Best Practices
+
+### Tax Configuration
+
+1. **Default Tax**: Always set one tax as default for automatic application to new products
+2. **Rate Format**: Use decimal format (0.19 for 19%, not 19)
+3. **Exempt Products**: Create a 0% tax rate for exempt products
+4. **Deactivation**: Instead of deleting taxes, deactivate them to preserve historical records
+
+### Print Format
+
+Choose the print format based on your thermal printer:
+
+- **80mm**: Standard thermal printers (most common)
+- **58mm**: Compact thermal printers (mobile POS)
+- **A4**: Laser printers for invoices
+
+### Example Setup
+
+```bash
+# 1. Create standard IVA tax
+curl -X POST "https://api.torn.cl/api/config/taxes/" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "IVA",
+    "rate": 0.19,
+    "is_active": true,
+    "is_default": true
+  }'
+
+# 2. Create exempt tax
+curl -X POST "https://api.torn.cl/api/config/taxes/" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Exento",
+    "rate": 0.0,
+    "is_active": true,
+    "is_default": false
+  }'
+
+# 3. Configure system settings
+curl -X PUT "https://api.torn.cl/api/config/settings/" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "print_format": "80mm",
+    "iva_default_id": 1
+  }'
+```

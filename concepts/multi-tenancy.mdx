@@ -1,0 +1,354 @@
+---
+title: Multi-Tenancy Architecture
+description: Understand Torn's schema-per-tenant isolation model for secure, scalable SaaS operations
+icon: building
+---
+
+## Overview
+
+Torn implements a **schema-per-tenant** architecture using PostgreSQL's native schema isolation. Each company (tenant) gets its own dedicated database schema, providing complete data isolation while sharing the same database instance.
+
+<Note>
+  This approach combines the security benefits of separate databases with the operational simplicity of a single PostgreSQL instance.
+</Note>
+
+## Architecture Components
+
+The multi-tenant system consists of three layers:
+
+<CardGroup cols={3}>
+  <Card title="Global Layer" icon="globe">
+    The `public` schema stores:
+    - SaaS plans and pricing
+    - Global user accounts
+    - Tenant registry
+  </Card>
+  <Card title="Tenant Schemas" icon="database">
+    Each `tenant_*` schema contains:
+    - Operational data (sales, inventory)
+    - Local users and permissions
+    - DTE documents
+  </Card>
+  <Card title="Access Bridge" icon="link">
+    The `tenant_users` table links:
+    - Global users to tenants
+    - Role assignments
+    - Access permissions
+  </Card>
+</CardGroup>
+
+## Data Models
+
+### Global Schema (public)
+
+All SaaS infrastructure lives in the `public` schema:
+
+```python app/models/saas.py
+class Tenant(Base):
+    """La entidad Empresa / Inquilino.
+    
+    El `schema_name` es la clave para la arquitectura Tenant-per-Schema.
+    Determina a qué esquema físico de PostgreSQL apunta la sesión de SQLAlchemy.
+    """
+    __tablename__ = "tenants"
+    __table_args__ = {'schema': 'public'}
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    rut = Column(String(20), unique=True, index=True)
+    schema_name = Column(String(63), unique=True, nullable=False)
+    
+    is_active = Column(Boolean, default=True)
+    plan_id = Column(Integer, ForeignKey("public.saas_plans.id"))
+    
+    # DTE Configuration
+    address = Column(String(300))
+    commune = Column(String(100))
+    city = Column(String(100))
+    giro = Column(String(200))
+    economic_activities = Column(JSONB, server_default='[]')
+```
+
+### Global User Model
+
+Users can access multiple tenants with different roles:
+
+```python app/models/saas.py
+class SaaSUser(Base):
+    """Usuario Global del Sistema.
+    
+    Un usuario físico real. Puede tener acceso a múltiples Tenants.
+    """
+    __tablename__ = "saas_users"
+    __table_args__ = {'schema': 'public'}
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String(255), unique=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    full_name = Column(String(200))
+    is_active = Column(Boolean, default=True)
+    is_superuser = Column(Boolean, default=False)
+```
+
+### Tenant-User Bridge
+
+The `tenant_users` table manages which users can access which tenants:
+
+```python app/models/saas.py
+class TenantUser(Base):
+    """Tabla intermedia: Usuario Global <-> Tenant.
+    
+    Define a qué empresa tiene acceso un Usuario Global y con qué rol.
+    """
+    __tablename__ = "tenant_users"
+    __table_args__ = {'schema': 'public'}
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("public.tenants.id"))
+    user_id = Column(Integer, ForeignKey("public.saas_users.id"))
+    
+    role_name = Column(String(50), default="user")
+    is_active = Column(Boolean, default=True)
+```
+
+## Tenant Provisioning
+
+### The Provisioning Process
+
+When a new company signs up, Torn executes a multi-stage provisioning workflow:
+
+<Steps>
+  <Step title="Generate Schema Name">
+    Creates a unique schema identifier based on the company's RUT:
+    
+    ```python app/services/tenant_service.py
+    def _generate_schema_name(rut: str) -> str:
+        """Genera un nombre de esquema seguro basado en el RUT."""
+        clean_rut = re.sub(r'[^a-zA-Z0-9]', '', rut.lower())
+        return f"tenant_{clean_rut}"
+    ```
+  </Step>
+  
+  <Step title="Register in Global Schema">
+    Creates the tenant record in `public.tenants`:
+    
+    ```python app/services/tenant_service.py
+    new_tenant = Tenant(
+        name=tenant_name, 
+        rut=rut, 
+        schema_name=schema_name,
+        address=address,
+        commune=commune,
+        city=city,
+        giro=giro,
+        economic_activities=economic_activities
+    )
+    global_db.add(new_tenant)
+    global_db.commit()
+    ```
+  </Step>
+  
+  <Step title="Create Physical Schema">
+    Executes DDL to create the PostgreSQL schema:
+    
+    ```python app/services/tenant_service.py
+    connection.execute(text(f'CREATE SCHEMA "{schema_name}"'))
+    connection.commit()
+    ```
+  </Step>
+  
+  <Step title="Deploy Operational Tables">
+    Runs the base SQL script with schema context:
+    
+    ```python app/services/tenant_service.py
+    final_sql = f'SET search_path TO "{schema_name}";\n' + sql_script
+    
+    result = subprocess.run(
+        ["psql", "-U", "torn", "-h", "localhost", 
+         "-d", "torn_db", "-f", temp_path],
+        env=env, capture_output=True
+    )
+    ```
+  </Step>
+  
+  <Step title="Seed Initial Data">
+    Populates the issuer (company data) and default roles:
+    
+    ```python app/services/tenant_service.py
+    # Initialize Issuer
+    insert_issuer_sql = text(f"""
+        INSERT INTO "{schema_name}".issuers 
+        (rut, razon_social, giro, acteco, direccion)
+        VALUES (:rut, :razon_social, :giro, :acteco, :direccion)
+    """)
+    
+    # Create default roles
+    insert_roles_sql = text(f"""
+        INSERT INTO "{schema_name}".roles 
+        (name, description, permissions)
+        VALUES 
+            ('ADMINISTRADOR', 'Acceso total', '{"all": true}'::jsonb),
+            ('VENDEDOR', 'Ventas y caja', '{"sales": true}'::jsonb)
+    """)
+    ```
+  </Step>
+  
+  <Step title="Stamp Alembic Version">
+    Marks the schema as up-to-date with migrations:
+    
+    ```python app/services/tenant_service.py
+    alembic_cfg = Config("alembic.ini")
+    alembic_cfg.attributes['connection'] = connection
+    command.stamp(alembic_cfg, "head")
+    ```
+  </Step>
+</Steps>
+
+### Complete Provisioning Function
+
+Here's the full orchestration from `app/services/tenant_service.py:37`:
+
+```python app/services/tenant_service.py
+def provision_new_tenant(
+    global_db: Session, 
+    tenant_name: str, 
+    rut: str, 
+    owner_id: int,
+    address: str = None,
+    commune: str = None,
+    city: str = None,
+    giro: str = None,
+    economic_activities: list = []
+) -> Tenant:
+    """Crea una nueva empresa, su esquema SQL y ejecuta las migraciones.
+    
+    Returns:
+        El modelo `Tenant` creado en `public.tenants`.
+    """
+    schema_name = _generate_schema_name(rut)
+    
+    # Validate uniqueness
+    existing = global_db.query(Tenant).filter(
+        Tenant.schema_name == schema_name
+    ).first()
+    if existing:
+        raise Exception(f"Ya existe un inquilino para el RUT: {rut}")
+    
+    # Create tenant record
+    new_tenant = Tenant(
+        name=tenant_name, 
+        rut=rut, 
+        schema_name=schema_name,
+        # ... other fields
+    )
+    global_db.add(new_tenant)
+    global_db.commit()
+    
+    # Physical schema creation
+    connection = engine.connect()
+    try:
+        connection.execute(text(f'CREATE SCHEMA "{schema_name}"'))
+        # ... deploy tables, seed data, stamp migrations
+        connection.commit()
+    except Exception as e:
+        global_db.rollback()
+        new_tenant.is_active = False
+        raise Exception(f"Fallo aprovisionando: {str(e)}")
+    finally:
+        connection.close()
+    
+    return new_tenant
+```
+
+## Runtime Schema Switching
+
+### Database Session Management
+
+Torn uses SQLAlchemy's `schema_translate_map` to dynamically route queries to the correct tenant schema:
+
+```python app/dependencies/tenant.py
+def get_tenant_db(tenant_user: TenantUser = Depends(get_current_tenant_user)):
+    """Returns a DB session bound to the tenant's schema."""
+    schema_name = tenant_user.tenant.schema_name
+    
+    db = SessionLocal()
+    db.connection(
+        execution_options={"schema_translate_map": {None: schema_name}}
+    )
+    
+    try:
+        yield db
+    finally:
+        db.close()
+```
+
+<Info>
+  All tenant-specific operations use `get_tenant_db()` as a dependency, ensuring queries are automatically scoped to the correct schema without manual prefixing.
+</Info>
+
+## Security Benefits
+
+<AccordionGroup>
+  <Accordion title="Data Isolation">
+    Each tenant's data exists in a separate PostgreSQL schema. Even with SQL injection vulnerabilities, one tenant cannot access another's data without explicit schema switching—which requires authentication.
+  </Accordion>
+  
+  <Accordion title="Backup Granularity">
+    You can backup or restore individual tenant schemas using:
+    ```bash
+    pg_dump -n tenant_12345678k torn_db > backup.sql
+    ```
+  </Accordion>
+  
+  <Accordion title="Migration Safety">
+    Schema-level migrations can be tested on a single tenant before rolling out globally. Failed migrations only affect one customer.
+  </Accordion>
+  
+  <Accordion title="Performance Isolation">
+    Heavy queries from one tenant don't lock tables for others, as each schema maintains separate table instances.
+  </Accordion>
+</AccordionGroup>
+
+## Schema Discovery
+
+To list all provisioned tenant schemas:
+
+```sql
+SELECT schema_name 
+FROM information_schema.schemata 
+WHERE schema_name LIKE 'tenant_%';
+```
+
+To verify a tenant's table structure:
+
+```sql
+SELECT table_name 
+FROM information_schema.tables 
+WHERE table_schema = 'tenant_12345678k';
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Always Use Dependencies" icon="shield-check">
+    Never hardcode schema names. Always use `get_tenant_db()` to ensure proper isolation.
+  </Card>
+  
+  <Card title="Validate RUT Uniqueness" icon="fingerprint">
+    The RUT serves as the natural key for tenants. Enforce uniqueness at the database level.
+  </Card>
+  
+  <Card title="Handle Provisioning Failures" icon="triangle-exclamation">
+    Provisioning is a multi-step process. Always wrap in try/catch and mark tenants as `is_active=False` on failure.
+  </Card>
+  
+  <Card title="Monitor Schema Count" icon="chart-line">
+    PostgreSQL handles thousands of schemas efficiently, but monitor `pg_namespace` size as you scale.
+  </Card>
+</CardGroup>
+
+## Related Concepts
+
+- [Authentication & Permissions](/api/authentication)
+- [Tenant Management](/guides/tenant-management)
+- [User Roles](/guides/user-roles)
