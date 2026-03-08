@@ -116,6 +116,7 @@
             "pages": [
               "api/users",
               "api/roles",
+              "api/issuer",
               "api/config",
               "api/folios"
             ]
