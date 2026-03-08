@@ -1,0 +1,150 @@
+{
+  "projectType": "saas",
+  "projectName": "Torn",
+  "projectDescription": "Multi-tenant electronic invoicing and POS system for Chilean businesses with SII compliance",
+  "theme": "linden",
+  "primaryColor": "#2563eb",
+  "lightColor": "#60a5fa",
+  "darkColor": "#1e40af",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/multi-tenancy",
+              "concepts/electronic-invoicing",
+              "concepts/pos-workflow",
+              "concepts/inventory-system"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/tenant-management",
+              "guides/sales-process",
+              "guides/inventory-management",
+              "guides/cash-management",
+              "guides/user-roles",
+              "guides/returns-refunds"
+            ]
+          },
+          {
+            "group": "Integration",
+            "pages": [
+              "integration/authentication",
+              "integration/api-overview"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "SaaS Management",
+            "pages": [
+              "api/tenants",
+              "api/tenant-users",
+              "api/plans"
+            ]
+          },
+          {
+            "group": "Sales",
+            "pages": [
+              "api/sales",
+              "api/payment-methods",
+              "api/returns"
+            ]
+          },
+          {
+            "group": "Products & Inventory",
+            "pages": [
+              "api/products",
+              "api/brands",
+              "api/price-lists",
+              "api/inventory"
+            ]
+          },
+          {
+            "group": "Customers & Suppliers",
+            "pages": [
+              "api/customers",
+              "api/providers",
+              "api/purchases"
+            ]
+          },
+          {
+            "group": "Cash & Reports",
+            "pages": [
+              "api/cash-sessions",
+              "api/reports",
+              "api/stats"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "api/users",
+              "api/roles",
+              "api/config",
+              "api/folios"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-tenant SaaS with schema isolation",
+    "Chilean SII electronic invoicing (DTE) compliance",
+    "Point of Sale with cash session management",
+    "Inventory tracking with Kardex movements",
+    "Customer credit accounts and payment processing",
+    "Sales returns and credit notes",
+    "Product catalog with brands and price lists",
+    "User management with role-based access control",
+    "Purchase and supplier management",
+    "Daily reports and sales statistics"
+  ],
+  "publicApiSurface": [
+    "POST /saas/tenants - Register new tenant",
+    "GET /saas/tenants - List all tenants",
+    "POST /saas/tenants/{id}/users - Assign user to tenant",
+    "POST /sales/ - Create sale",
+    "POST /sales/return - Process return/refund",
+    "GET /sales/payment-methods - List payment methods",
+    "POST /products/ - Create product",
+    "GET /products/ - List products",
+    "POST /customers/ - Create customer",
+    "GET /customers/ - List customers",
+    "POST /inventory/movement - Record stock movement",
+    "GET /inventory/kardex - Get stock movement history",
+    "POST /cash/sessions - Open cash session",
+    "POST /cash/sessions/{id}/close - Close cash session",
+    "GET /reports/daily - Get daily sales report",
+    "GET /stats/dashboard - Get dashboard statistics",
+    "POST /auth/login - Authenticate user",
+    "POST /users/ - Create user",
+    "GET /users/ - List users",
+    "POST /roles/ - Create role",
+    "GET /folios/ - List available folios"
+  ]
+}
